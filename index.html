@@ -1,0 +1,2494 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>邊境據點 Web 版</title>
+  <style>
+    :root {
+      --bg: #0d1411;
+      --panel: rgba(14, 26, 21, 0.86);
+      --panel-strong: rgba(7, 15, 12, 0.94);
+      --line: rgba(197, 255, 208, 0.16);
+      --accent: #9ae27b;
+      --accent-2: #f3d06e;
+      --danger: #ff7c6f;
+      --text: #f3ffef;
+      --muted: #b4d0b9;
+      --shadow: rgba(0, 0, 0, 0.38);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at top, rgba(55, 107, 75, 0.28), transparent 36%),
+        radial-gradient(circle at bottom right, rgba(151, 71, 57, 0.22), transparent 34%),
+        linear-gradient(180deg, #0a100d, #101913 52%, #0b110e);
+      color: var(--text);
+      font-family: "Noto Sans TC", "Microsoft JhengHei", sans-serif;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 18px;
+    }
+
+    .shell {
+      width: min(100%, 1650px);
+      display: grid;
+      gap: 14px;
+    }
+
+    .topbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      padding: 16px 20px;
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      background: var(--panel);
+      box-shadow: 0 18px 48px var(--shadow);
+      backdrop-filter: blur(10px);
+    }
+
+    .topbar h1 {
+      margin: 0;
+      font-size: clamp(24px, 3vw, 34px);
+      letter-spacing: 0.08em;
+    }
+
+    .topbar .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      font-size: 18px;
+      color: var(--muted);
+    }
+
+    .pill {
+      padding: 8px 12px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.04);
+    }
+
+    .frame {
+      position: relative;
+      border-radius: 28px;
+      overflow: hidden;
+      border: 1px solid rgba(216, 255, 226, 0.16);
+      box-shadow: 0 24px 56px var(--shadow);
+      background: #08100c;
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: auto;
+      background: linear-gradient(180deg, #0e1812, #152117);
+    }
+
+    .help {
+      padding: 14px 18px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: var(--panel);
+      font-size: 18px;
+      line-height: 1.6;
+      color: var(--muted);
+    }
+
+    .help strong {
+      color: var(--text);
+    }
+
+    .hidden-input {
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <div class="topbar">
+      <h1>邊境據點 Web 版</h1>
+      <div class="meta">
+        <span class="pill">單檔 `index.html`</span>
+        <span class="pill">左鍵射擊 / 右鍵毒藥水</span>
+        <span class="pill">ESC 暫停 / 存讀檔</span>
+      </div>
+    </div>
+    <div class="frame">
+      <canvas id="game" width="1600" height="900"></canvas>
+    </div>
+    <div class="help">
+      <strong>這版說明：</strong>
+      這是把原本 Allegro 遊戲整理成瀏覽器可玩的等效版，保留大地圖探索、採集、建築、防守、關卡、綠國、商店、神社、職業、Boss 戰等主系統。桌面版的 `txt` 存檔在網頁中改成 `localStorage`，另外也支援匯出 / 載入文字存檔。
+    </div>
+    <input id="importSave" class="hidden-input" type="file" accept=".txt" />
+  </div>
+
+  <script>
+    (() => {
+      "use strict";
+
+      const canvas = document.getElementById("game");
+      const ctx = canvas.getContext("2d");
+      const importInput = document.getElementById("importSave");
+
+      const SCREEN_W = 1600;
+      const SCREEN_H = 900;
+      const WORLD_W = 7680;
+      const WORLD_H = 7680;
+      const BASE_POS = { x: WORLD_W * 0.5, y: WORLD_H * 0.5 };
+      const SHRINE_POS = { x: BASE_POS.x, y: 260 };
+      const GREEN_COUNTRY = { x: 720, y: 720, w: 1040, h: 760 };
+      const VILLAGE_POS = { x: WORLD_W - 820, y: WORLD_H * 0.34 };
+      const VILLAGE_BASE_POS = { x: VILLAGE_POS.x + 170, y: VILLAGE_POS.y - 36 };
+      const BOSS_ZONE_POS = { x: WORLD_W - 420, y: 420 };
+      const CULT_PORTAL_POS = { x: BASE_POS.x - 420, y: BASE_POS.y + 220 };
+      const CULT_FORTRESS_POS = { x: 760, y: WORLD_H - 860 };
+      const CULT_FORTRESS_PORTAL_POS = { x: CULT_FORTRESS_POS.x, y: CULT_FORTRESS_POS.y + 250 };
+      const JOBS = [
+        { id: 1, key: "1", name: "無業遊民", desc: "沒有特殊能力。" },
+        { id: 2, key: "2", name: "吸血鬼", desc: "每 3 次命中吸血，J 可回核心。" },
+        { id: 3, key: "3", name: "伐木工", desc: "採集樹石收益大幅提升。" },
+        { id: 4, key: "4", name: "漁夫", desc: "可放船、上船，船會自動開火。" },
+        { id: 5, key: "5", name: "外星人", desc: "J 八連砲，K 召喚採集/戰鬥小兵。" },
+        { id: 6, key: "6", name: "菁英", desc: "高防禦，毒藥更強。" }
+      ];
+      const BUILDINGS = {
+        wall: { key: "1", name: "圍牆", cost: { wood: 20, stone: 10, fiber: 0, crystal: 0 } },
+        turret: { key: "2", name: "砲塔", cost: { wood: 22, stone: 18, fiber: 0, crystal: 4 } },
+        camp: { key: "3", name: "營地", cost: { wood: 32, stone: 24, fiber: 14, crystal: 6 } },
+        darkMageTower: { key: "4", name: "黑暗小法師", cost: { wood: 60, stone: 48, fiber: 30, crystal: 20 } },
+        house: { key: "5", name: "房子", cost: { wood: 300, stone: 200, fiber: 200, crystal: 150 } }
+      };
+      const GREEN_COUNTRY_SUMMON_THRESHOLD = 50;
+      const GREEN_COUNTRY_ASSAULT_COUNT = 25;
+      const GREEN_COUNTRY_DEFENDER_COUNT = 15;
+      const DARK_MAGE_SUMMON_COUNT = 8;
+      const SAVE_KEY = "fightgame-web-save-1";
+      const RUBY_KEY = "fightgame-web-permanent-rubies";
+      const TXT_SAVE_PREFIX = "FIGHTGAME_WEB_SAVE";
+
+      const keys = new Set();
+      const mouse = { x: SCREEN_W * 0.5, y: SCREEN_H * 0.5, worldX: 0, worldY: 0, left: false, right: false };
+      let lastTime = performance.now();
+
+      function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
+      function rand(min, max) { return Math.random() * (max - min) + min; }
+      function dist(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
+      function ang(a, b) { return Math.atan2(b.y - a.y, b.x - a.x); }
+      function normalize(vx, vy) {
+        const len = Math.hypot(vx, vy) || 1;
+        return { x: vx / len, y: vy / len };
+      }
+      function lerp(a, b, t) { return a + (b - a) * t; }
+      function formatTime(seconds) {
+        const total = Math.max(0, Math.ceil(seconds));
+        const m = Math.floor(total / 60);
+        const s = total % 60;
+        return `${m}:${String(s).padStart(2, "0")}`;
+      }
+      function inRect(pos, rect) {
+        return pos.x >= rect.x && pos.x <= rect.x + rect.w && pos.y >= rect.y && pos.y <= rect.y + rect.h;
+      }
+      function worldToScreen(x, y, camera) {
+        return { x: x - camera.x, y: y - camera.y };
+      }
+      function isWater(x, y) {
+        const river = Math.sin((x / WORLD_W) * Math.PI * 1.6) * 120 + WORLD_H * 0.52;
+        const riverWidth = 160 + Math.cos((x / WORLD_W) * Math.PI * 2.4) * 28;
+        if (Math.abs(y - river) < riverWidth) return true;
+        if (x > CULT_FORTRESS_POS.x - 320 && x < CULT_FORTRESS_POS.x + 320 && y > CULT_FORTRESS_POS.y - 420 && y < CULT_FORTRESS_POS.y - 200) return true;
+        return false;
+      }
+      function isGreenCountryArea(pos) {
+        return Math.abs(pos.x - GREEN_COUNTRY.x) <= GREEN_COUNTRY.w * 0.5 && Math.abs(pos.y - GREEN_COUNTRY.y) <= GREEN_COUNTRY.h * 0.5;
+      }
+      function isCultFortressArea(pos) {
+        return Math.abs(pos.x - CULT_FORTRESS_POS.x) <= 460 && Math.abs(pos.y - CULT_FORTRESS_POS.y) <= 360;
+      }
+      function isVillageArea(pos) {
+        return Math.abs(pos.x - VILLAGE_POS.x) <= 440 && Math.abs(pos.y - VILLAGE_POS.y) <= 320;
+      }
+      function isBossZoneArea(pos) {
+        return Math.abs(pos.x - BOSS_ZONE_POS.x) <= 250 && Math.abs(pos.y - BOSS_ZONE_POS.y) <= 220;
+      }
+
+      function getPermanentRubies() {
+        return Number(localStorage.getItem(RUBY_KEY) || "0");
+      }
+      function setPermanentRubies(v) {
+        localStorage.setItem(RUBY_KEY, String(v));
+      }
+
+      function createState() {
+        return {
+          scene: "title",
+          selectedJob: 1,
+          introTimer: 0,
+          pause: false,
+          camera: { x: BASE_POS.x - SCREEN_W * 0.5, y: BASE_POS.y - SCREEN_H * 0.5, shake: 0 },
+          day: 1,
+          dayTimer: 0,
+          difficulty: 1,
+          stage: 1,
+          totalMonsterKills: 0,
+          totalDarkMageKills: 0,
+          stage3BanditKills: 0,
+          stage3DarkMageKills: 0,
+          shrineClaimDay: 0,
+          shrineDarkMagesSummoned: false,
+          permanentRubies: getPermanentRubies(),
+          hasSword: false,
+          hasArmor: false,
+          hasPoisonUpgrade: false,
+          villageEventStarted: false,
+          villageBaseDestroyed: false,
+          emeraldDropped: false,
+          carryingEmerald: false,
+          emeraldDelivered: false,
+          bossSpawned: false,
+          bossDefeated: false,
+          greenCountryBossSpawned: false,
+          greenCountryBossDefeated: false,
+          greenCountryOwnedByPlayer: false,
+          greenCountryBossSummonTimer: 20,
+          inCultFortress: false,
+          greenCountryAssaultTriggered: false,
+          inventory: {
+            wood: 35,
+            stone: 28,
+            fiber: 14,
+            crystal: 6,
+            vegetable: 2,
+            meat: 2,
+            fish: 0,
+            bomb: 0,
+            emerald: 0
+          },
+          player: {
+            x: BASE_POS.x + 20,
+            y: BASE_POS.y + 140,
+            radius: 18,
+            speed: 250,
+            hp: 180,
+            maxHp: 180,
+            hunger: 100,
+            cores: 100,
+            level: 1,
+            xp: 0,
+            xpToNext: 25,
+            facing: 0,
+            vampireHits: 0,
+            poisonCooldown: 0,
+            meleeCooldown: 0,
+            shootCooldown: 0,
+            bombCooldown: 0,
+            fishCooldown: 0,
+            coreRecallCooldown: 0,
+            alienBurstCooldown: 0,
+            alienSummonCooldown: 0,
+            onBoat: false,
+            boatId: null,
+            hungerDamageTick: 0
+          },
+          activeShop: null,
+          buildMode: false,
+          selectedBuild: "wall",
+          resources: [],
+          buildings: [],
+          monsters: [],
+          projectiles: [],
+          poisonClouds: [],
+          minions: [],
+          boats: [],
+          crops: [],
+          messages: [],
+          waveTimer: 8,
+          autosaveTimer: 20,
+          pointerHint: "",
+          villageBaseHp: 650,
+          villageBaseMaxHp: 650,
+          greenStructures: [],
+          elapsed: 0
+        };
+      }
+
+      let game = createState();
+
+      function pushMessage(text, time = 3.6) {
+        game.messages.push({ text, time });
+      }
+
+      function addResource(type, x, y, hp = 1) {
+        game.resources.push({ id: crypto.randomUUID(), type, x, y, hp, maxHp: hp, alive: true, respawn: 0 });
+      }
+
+      function generateResources() {
+        game.resources = [];
+        const trySpawn = (type, count, hp, margin = 120) => {
+          for (let i = 0; i < count; i++) {
+            for (let t = 0; t < 80; t++) {
+              const x = rand(margin, WORLD_W - margin);
+              const y = rand(margin, WORLD_H - margin);
+              if (isWater(x, y)) continue;
+              if (dist({ x, y }, BASE_POS) < 260) continue;
+              addResource(type, x, y, hp);
+              break;
+            }
+          }
+        };
+        trySpawn("tree", 180, 3);
+        trySpawn("stone", 130, 3);
+        trySpawn("grass", 120, 2);
+        trySpawn("crystal", 65, 3);
+      }
+
+      function addBuilding(type, x, y, friendly = true) {
+        const stats = {
+          wall: { hp: 180, radius: 28 },
+          turret: { hp: 160, radius: 32 },
+          camp: { hp: 220, radius: 42 },
+          darkMageTower: { hp: 200, radius: 38 },
+          house: { hp: 380, radius: 60 }
+        }[type];
+        const building = {
+          id: crypto.randomUUID(),
+          type,
+          x, y,
+          radius: stats.radius,
+          hp: stats.hp,
+          maxHp: stats.hp,
+          fireCooldown: 0,
+          healTick: 0,
+          summonCooldown: type === "darkMageTower" ? 12 : type === "house" ? 0 : 0,
+          alive: true,
+          friendly
+        };
+        game.buildings.push(building);
+        if (type === "house") {
+          for (let i = 0; i < 5; i++) {
+            spawnMinion(x + rand(-48, 48), y + rand(-48, 48), { elite: true, gatherOnly: false });
+          }
+        }
+        return building;
+      }
+
+      function createGreenStructure(type, x, y) {
+        const map = {
+          house: { hp: 260, radius: 38, spawnCooldown: 12 },
+          camp: { hp: 420, radius: 52, spawnCooldown: 10 },
+          hall: { hp: 680, radius: 88, spawnCooldown: 8 }
+        };
+        return { id: crypto.randomUUID(), type, x, y, hp: map[type].hp, maxHp: map[type].hp, radius: map[type].radius, spawnCooldown: map[type].spawnCooldown, alive: true };
+      }
+
+      function greenHousePositions() {
+        return [
+          { x: GREEN_COUNTRY.x - 250, y: GREEN_COUNTRY.y - 118 },
+          { x: GREEN_COUNTRY.x - 88, y: GREEN_COUNTRY.y - 124 },
+          { x: GREEN_COUNTRY.x + 76, y: GREEN_COUNTRY.y - 116 },
+          { x: GREEN_COUNTRY.x + 228, y: GREEN_COUNTRY.y - 108 },
+          { x: GREEN_COUNTRY.x - 176, y: GREEN_COUNTRY.y + 70 },
+          { x: GREEN_COUNTRY.x + 150, y: GREEN_COUNTRY.y + 84 }
+        ];
+      }
+      function greenCampPositions() {
+        return [
+          { x: GREEN_COUNTRY.x - 272, y: GREEN_COUNTRY.y + 150 },
+          { x: GREEN_COUNTRY.x, y: GREEN_COUNTRY.y + 156 },
+          { x: GREEN_COUNTRY.x + 272, y: GREEN_COUNTRY.y + 148 }
+        ];
+      }
+      function greenHallPos() {
+        return { x: GREEN_COUNTRY.x + 6, y: GREEN_COUNTRY.y - 18 };
+      }
+      function greenFarmPlots() {
+        const hall = greenHallPos();
+        return [
+          { x: hall.x - 96, y: hall.y + 156 }, { x: hall.x - 32, y: hall.y + 156 }, { x: hall.x + 32, y: hall.y + 156 }, { x: hall.x + 96, y: hall.y + 156 },
+          { x: hall.x - 96, y: hall.y + 208 }, { x: hall.x - 32, y: hall.y + 208 }, { x: hall.x + 32, y: hall.y + 208 }, { x: hall.x + 96, y: hall.y + 208 },
+          { x: hall.x, y: hall.y + 260 }
+        ];
+      }
+
+      function resetGreenCountry() {
+        game.greenStructures = [];
+        greenHousePositions().forEach((p) => game.greenStructures.push(createGreenStructure("house", p.x, p.y)));
+        greenCampPositions().forEach((p) => game.greenStructures.push(createGreenStructure("camp", p.x, p.y)));
+        const hall = greenHallPos();
+        game.greenStructures.push(createGreenStructure("hall", hall.x, hall.y));
+      }
+
+      function spawnMonster(type, x, y, extra = {}) {
+        const base = {
+          slime: { hp: 44, speed: 76, damage: 7, radius: 18, ranged: false, faction: "monster" },
+          brute: { hp: 110, speed: 58, damage: 18, radius: 26, ranged: false, faction: "monster" },
+          archer: { hp: 72, speed: 84, damage: 12, radius: 18, ranged: true, faction: "monster" },
+          knight: { hp: 120, speed: 105, damage: 20, radius: 24, ranged: false, faction: "monster" },
+          darkMage: { hp: 150, speed: 74, damage: 16, radius: 24, ranged: true, faction: "monster" },
+          boss: { hp: 1350, speed: 88, damage: 34, radius: 44, ranged: true, faction: "monster" },
+          greenGuard: { hp: 300, speed: 126, damage: 30, radius: 24, ranged: false, faction: "green" },
+          greenVillager: { hp: 200, speed: 94, damage: 14, radius: 18, ranged: false, faction: "green" },
+          greenMage: { hp: 240, speed: 86, damage: 22, radius: 20, ranged: true, faction: "green" }
+        }[type];
+        const monster = {
+          id: crypto.randomUUID(),
+          type,
+          x, y,
+          homeX: x,
+          homeY: y,
+          roamX: x,
+          roamY: y,
+          hp: base.hp,
+          maxHp: base.hp,
+          speed: base.speed,
+          damage: base.damage,
+          radius: base.radius,
+          faction: base.faction,
+          ranged: base.ranged,
+          bossKind: "normal",
+          attackCooldown: 0,
+          poisonTimer: 0,
+          poisonTick: 0,
+          specialCooldown: type === "knight" || type === "greenGuard" ? 1 : 0,
+          sprintTimer: 0,
+          alive: true,
+          enraged: false,
+          farmTimer: rand(4, 8),
+          duty: "normal",
+          provoked: false,
+          ...extra
+        };
+        game.monsters.push(monster);
+        return monster;
+      }
+
+      function spawnGreenGuard(x, y) {
+        return spawnMonster("greenGuard", x, y, { duty: "normal" });
+      }
+      function spawnGreenVillager(x, y) {
+        return spawnMonster("greenVillager", x, y, { duty: "normal" });
+      }
+      function spawnGreenMage(x, y) {
+        return spawnMonster("greenMage", x, y, { duty: "normal" });
+      }
+
+      function spawnMinion(x, y, { elite = false, gatherOnly = false } = {}) {
+        game.minions.push({
+          id: crypto.randomUUID(),
+          x, y,
+          roamX: x + rand(-80, 80),
+          roamY: y + rand(-80, 80),
+          hp: elite ? 260 : gatherOnly ? 52 : 78,
+          maxHp: elite ? 260 : gatherOnly ? 52 : 78,
+          speed: elite ? 170 : 128,
+          damage: elite ? 80 : gatherOnly ? 8 : 16,
+          attackCooldown: rand(0.2, 1.0),
+          specialCooldown: rand(0.2, 1.0),
+          gatherCooldown: rand(0.2, 1.2),
+          elite,
+          gatherOnly,
+          alive: true
+        });
+      }
+
+      function spawnBoat(x, y) {
+        game.boats.push({
+          id: crypto.randomUUID(),
+          x, y,
+          vx: rand(-60, 60),
+          vy: rand(-20, 20),
+          fireCooldown: rand(0.4, 1.2),
+          friendly: true
+        });
+      }
+
+      function createInitialBase() {
+        const offset = [
+          [-88, -88], [88, -88], [-88, 88], [88, 88],
+          [-160, -8], [160, -8]
+        ];
+        offset.forEach(([dx, dy]) => addBuilding("wall", BASE_POS.x + dx, BASE_POS.y + dy));
+        addBuilding("camp", BASE_POS.x - 110, BASE_POS.y + 170);
+        addBuilding("camp", BASE_POS.x, BASE_POS.y + 210);
+        addBuilding("camp", BASE_POS.x + 110, BASE_POS.y + 170);
+        addBuilding("turret", BASE_POS.x - 190, BASE_POS.y + 30);
+        addBuilding("turret", BASE_POS.x - 70, BASE_POS.y - 170);
+        addBuilding("turret", BASE_POS.x + 70, BASE_POS.y - 170);
+        addBuilding("turret", BASE_POS.x + 190, BASE_POS.y + 30);
+      }
+
+      function createShopsAndBoats() {
+        if (game.selectedJob === 4) {
+          spawnBoat(BASE_POS.x - 420, BASE_POS.y + 40);
+          spawnBoat(BASE_POS.x - 580, BASE_POS.y - 180);
+          spawnBoat(BASE_POS.x - 300, BASE_POS.y - 220);
+        }
+      }
+
+      function startGame() {
+        game = createState();
+        applyJobStats();
+        generateResources();
+        createInitialBase();
+        resetGreenCountry();
+        spawnGreenVillager(GREEN_COUNTRY.x - 140, GREEN_COUNTRY.y - 110);
+        spawnGreenMage(GREEN_COUNTRY.x + 120, GREEN_COUNTRY.y - 90);
+        spawnGreenGuard(GREEN_COUNTRY.x - 180, GREEN_COUNTRY.y + 40);
+        spawnGreenVillager(GREEN_COUNTRY.x + 170, GREEN_COUNTRY.y + 30);
+        spawnGreenGuard(GREEN_COUNTRY.x - 40, GREEN_COUNTRY.y + 120);
+        spawnGreenMage(GREEN_COUNTRY.x + 36, GREEN_COUNTRY.y - 150);
+        createShopsAndBoats();
+        pushMessage("採集資源、建立防線，守住你的核心據點。", 4.2);
+        game.scene = "intro";
+      }
+
+      function applyJobStats() {
+        const p = game.player;
+        p.job = game.selectedJob;
+        if (game.selectedJob === 6) {
+          p.maxHp = 220;
+          p.hp = 220;
+        }
+      }
+
+      function gainXp(amount) {
+        game.player.xp += amount;
+        while (game.player.xp >= game.player.xpToNext) {
+          game.player.xp -= game.player.xpToNext;
+          game.player.level += 1;
+          game.player.xpToNext = Math.floor(game.player.xpToNext * 1.2 + 8);
+          game.player.maxHp += 12;
+          game.player.hp = Math.min(game.player.maxHp, game.player.hp + 22);
+          pushMessage(`等級提升到 ${game.player.level}！`, 3.2);
+        }
+      }
+
+      function nearestResource(maxDist = 80) {
+        let best = null;
+        let bestD = maxDist;
+        for (const node of game.resources) {
+          if (!node.alive) continue;
+          const d = dist(game.player, node);
+          if (d < bestD) { bestD = d; best = node; }
+        }
+        return best;
+      }
+
+      function nearestShop() {
+        const shops = [
+          { id: "bomb", x: BASE_POS.x + 380, y: BASE_POS.y + 220, r: 70 },
+          { id: "grocery", x: BASE_POS.x + 470, y: BASE_POS.y + 220, r: 70 },
+          { id: "tools", x: BASE_POS.x + 560, y: BASE_POS.y + 220, r: 70 }
+        ];
+        return shops.find((s) => dist(game.player, s) <= s.r) || null;
+      }
+
+      function interact() {
+        const shop = nearestShop();
+        if (shop) {
+          game.activeShop = shop.id;
+          return;
+        }
+        if (dist(game.player, SHRINE_POS) < 95) {
+          if (!game.shrineDarkMagesSummoned) {
+            game.shrineDarkMagesSummoned = true;
+            for (let i = 0; i < DARK_MAGE_SUMMON_COUNT; i++) {
+              const a = (Math.PI * 2 * i) / DARK_MAGE_SUMMON_COUNT;
+              spawnMonster("darkMage", SHRINE_POS.x + Math.cos(a) * rand(120, 220), SHRINE_POS.y + Math.sin(a) * rand(120, 220));
+            }
+            pushMessage("黑暗大法師已被召喚", 4.2);
+            return;
+          }
+          if (game.totalDarkMageKills < 4) {
+            pushMessage(`神社仍被封印，黑暗大法師討伐 ${game.totalDarkMageKills} / 4`, 3.4);
+            return;
+          }
+          if (game.shrineClaimDay === game.day) {
+            pushMessage("今天的紅寶石已經領過了。", 3);
+            return;
+          }
+          game.shrineClaimDay = game.day;
+          game.permanentRubies += 1;
+          setPermanentRubies(game.permanentRubies);
+          pushMessage("你從神社獲得了 1 顆永久紅寶石。", 3.6);
+          return;
+        }
+        if (dist(game.player, CULT_PORTAL_POS) < 90) {
+          game.player.x = CULT_FORTRESS_PORTAL_POS.x;
+          game.player.y = CULT_FORTRESS_PORTAL_POS.y;
+          game.inCultFortress = true;
+          pushMessage("你已進入邪教堡壘，危險倍增。", 3.6);
+          return;
+        }
+        if (dist(game.player, CULT_FORTRESS_PORTAL_POS) < 90) {
+          game.player.x = CULT_PORTAL_POS.x;
+          game.player.y = CULT_PORTAL_POS.y;
+          game.inCultFortress = false;
+          pushMessage("你已返回邊境據點。", 3);
+          return;
+        }
+        const node = nearestResource();
+        if (!node) return;
+        node.hp -= 1;
+        if (node.hp <= 0) {
+          node.alive = false;
+          node.respawn = rand(28, 48);
+          let amount = 1;
+          if (game.selectedJob === 3) {
+            if (node.type === "tree" || node.type === "stone") amount = 20;
+            if (node.type === "grass" || node.type === "crystal") amount = 6;
+          } else {
+            if (node.type === "tree" || node.type === "stone") amount = 8;
+            if (node.type === "grass") amount = 4;
+            if (node.type === "crystal") amount = 3;
+          }
+          if (node.type === "tree") { game.inventory.wood += amount; }
+          if (node.type === "stone") { game.inventory.stone += amount; }
+          if (node.type === "grass") { game.inventory.fiber += amount; game.inventory.vegetable += 1; }
+          if (node.type === "crystal") { game.inventory.crystal += amount; }
+          pushMessage(`採集成功：${node.type === "tree" ? "木材" : node.type === "stone" ? "石材" : node.type === "grass" ? "纖維/菜" : "水晶"} +${amount}`, 2.6);
+        } else {
+          pushMessage("持續採集中...", 1);
+        }
+      }
+
+      function fishAction() {
+        if (game.player.fishCooldown > 0) return;
+        if (!isWater(game.player.x + Math.cos(game.player.facing) * 70, game.player.y + Math.sin(game.player.facing) * 70)) {
+          pushMessage("要面向水面才能釣魚。", 2.6);
+          return;
+        }
+        game.player.fishCooldown = 2.3;
+        if (Math.random() < 0.78) {
+          game.inventory.fish += 1;
+          pushMessage("釣到魚了！", 2.6);
+        } else {
+          pushMessage("這次沒有釣到。", 2.2);
+        }
+      }
+
+      function eatFood() {
+        if (game.inventory.meat > 0) {
+          game.inventory.meat -= 1;
+          game.player.hunger = Math.min(100, game.player.hunger + 35);
+          game.player.hp = Math.min(game.player.maxHp, game.player.hp + 8);
+          pushMessage("吃了肉，恢復飽食與生命。", 2.2);
+          return;
+        }
+        if (game.inventory.vegetable > 0) {
+          game.inventory.vegetable -= 1;
+          game.player.hunger = Math.min(100, game.player.hunger + 24);
+          game.player.hp = Math.min(game.player.maxHp, game.player.hp + 5);
+          pushMessage("吃了菜，恢復飽食與生命。", 2.2);
+          return;
+        }
+        if (game.inventory.fish > 0) {
+          game.inventory.fish -= 1;
+          game.player.hunger = Math.min(100, game.player.hunger + 28);
+          game.player.hp = Math.min(game.player.maxHp, game.player.hp + 6);
+          pushMessage("吃了魚，恢復飽食與生命。", 2.2);
+          return;
+        }
+        pushMessage("背包裡沒有可吃的食物。", 2.4);
+      }
+
+      function shootProjectile(from, targetX, targetY, opts = {}) {
+        const dir = normalize(targetX - from.x, targetY - from.y);
+        game.projectiles.push({
+          id: crypto.randomUUID(),
+          x: from.x,
+          y: from.y,
+          vx: dir.x * (opts.speed || 520),
+          vy: dir.y * (opts.speed || 520),
+          damage: opts.damage || 16,
+          life: opts.life || 1.6,
+          radius: opts.radius || 6,
+          friendly: !!opts.friendly,
+          faction: opts.faction || "player",
+          poison: !!opts.poison,
+          poisonDuration: opts.poisonDuration || 0,
+          bomb: !!opts.bomb,
+          splash: opts.splash || 0
+        });
+      }
+
+      function throwPoisonPotion() {
+        if (game.player.poisonCooldown > 0) return;
+        game.player.poisonCooldown = 1.2;
+        const dmg = game.selectedJob === 6 ? 18 : 12;
+        shootProjectile(game.player, mouse.worldX, mouse.worldY, {
+          speed: 360,
+          damage: dmg + (game.hasPoisonUpgrade ? 8 : 0),
+          radius: 9,
+          friendly: true,
+          poison: true,
+          poisonDuration: game.selectedJob === 6 ? 6.5 : 5,
+          life: 1.6,
+          faction: "player"
+        });
+      }
+
+      function throwBomb() {
+        if (game.player.bombCooldown > 0 || game.inventory.bomb <= 0) {
+          if (game.inventory.bomb <= 0) pushMessage("沒有炸彈。", 2.2);
+          return;
+        }
+        game.player.bombCooldown = 0.8;
+        game.inventory.bomb -= 1;
+        shootProjectile(game.player, mouse.worldX, mouse.worldY, {
+          speed: 320,
+          damage: 34,
+          radius: 11,
+          friendly: true,
+          bomb: true,
+          splash: 160,
+          life: 1.4,
+          faction: "player"
+        });
+      }
+
+      function meleeAttack() {
+        if (game.player.meleeCooldown > 0) return;
+        game.player.meleeCooldown = game.hasSword ? 0.42 : 0.58;
+        const baseDamage = game.hasSword ? 38 : 22;
+        for (const monster of game.monsters) {
+          if (!monster.alive) continue;
+          if (dist(game.player, monster) <= 78) {
+            damageMonster(monster, baseDamage, { poison: false, source: "player" });
+          }
+        }
+        for (const structure of game.greenStructures) {
+          if (!structure.alive) continue;
+          if (dist(game.player, structure) <= structure.radius + 50) {
+            structure.hp -= baseDamage;
+          }
+        }
+      }
+
+      function damageMonster(monster, damage, extra = {}) {
+        if (!monster.alive) return;
+        let actual = damage;
+        if (monster.faction === "green") actual = Math.max(1, Math.round(damage * 0.9));
+        monster.hp -= actual;
+        if (extra.poison) {
+          monster.poisonTimer = Math.max(monster.poisonTimer, extra.poisonDuration || 4.6);
+          monster.poisonTick = 0.35;
+        }
+        if (monster.faction === "green") monster.provoked = true;
+        if (extra.source === "player" && game.selectedJob === 2) {
+          game.player.vampireHits += 1;
+          if (game.player.vampireHits >= 3) {
+            game.player.vampireHits = 0;
+            game.player.hp = Math.min(game.player.maxHp, game.player.hp + 10);
+            pushMessage("吸血鬼吸取了生命。", 2.1);
+          }
+        }
+        if (monster.hp <= 0) {
+          monster.alive = false;
+          if (monster.faction === "monster") {
+            game.totalMonsterKills += 1;
+            gainXp(monster.type === "boss" ? 50 : monster.type === "darkMage" ? 16 : 8);
+            if (monster.type === "darkMage") game.totalDarkMageKills += 1;
+            if (isVillageArea(monster) && ["slime", "archer", "knight", "brute"].includes(monster.type)) game.stage3BanditKills += 1;
+            if (isVillageArea(monster) && monster.type === "darkMage") game.stage3DarkMageKills += 1;
+            if (Math.random() < 0.65) game.inventory.meat += 1;
+            if (monster.type === "boss") {
+              if (monster.bossKind === "greenCountry") {
+                game.greenCountryBossDefeated = true;
+                game.greenCountryOwnedByPlayer = true;
+                pushMessage("綠國大魔王已被擊敗，綠國現在成為你的地盤。", 5);
+              } else {
+                game.bossDefeated = true;
+                game.scene = "victory";
+              }
+            }
+          }
+        }
+      }
+
+      function triggerGreenCountryBossIfDefeated() {
+        if (game.greenCountryBossSpawned || game.greenCountryOwnedByPlayer) return;
+        const aliveStructures = game.greenStructures.some((s) => s.alive);
+        const aliveUnits = game.monsters.some((m) => m.alive && m.faction === "green");
+        if (aliveStructures || aliveUnits) return;
+        spawnMonster("boss", GREEN_COUNTRY.x, GREEN_COUNTRY.y - 30, { bossKind: "greenCountry", hp: 1100, maxHp: 1100, damage: 28, speed: 94 });
+        game.greenCountryBossSpawned = true;
+        game.greenCountryBossSummonTimer = 20;
+        game.stage = Math.max(game.stage, 4);
+        pushMessage("綠國被消滅了，大魔王現身！", 5);
+      }
+
+      function updateGreenCountryBossSummon(dt) {
+        if (!game.greenCountryBossSpawned || game.greenCountryBossDefeated) return;
+        const boss = game.monsters.find((m) => m.alive && m.type === "boss" && m.bossKind === "greenCountry");
+        if (!boss) return;
+        game.greenCountryBossSummonTimer -= dt;
+        if (game.greenCountryBossSummonTimer > 0) return;
+        const angle = rand(0, Math.PI * 2);
+        const radius = rand(110, 180);
+        spawnMonster("darkMage", boss.x + Math.cos(angle) * radius, boss.y + Math.sin(angle) * radius);
+        game.greenCountryBossSummonTimer = 20;
+        pushMessage("大魔王召喚了一隻黑暗大法師。", 3.8);
+      }
+
+      function updatePlayer(dt) {
+        const p = game.player;
+        p.poisonCooldown = Math.max(0, p.poisonCooldown - dt);
+        p.meleeCooldown = Math.max(0, p.meleeCooldown - dt);
+        p.shootCooldown = Math.max(0, p.shootCooldown - dt);
+        p.bombCooldown = Math.max(0, p.bombCooldown - dt);
+        p.fishCooldown = Math.max(0, p.fishCooldown - dt);
+        p.coreRecallCooldown = Math.max(0, p.coreRecallCooldown - dt);
+        p.alienBurstCooldown = Math.max(0, p.alienBurstCooldown - dt);
+        p.alienSummonCooldown = Math.max(0, p.alienSummonCooldown - dt);
+        p.hunger = Math.max(0, p.hunger - dt * 1.2);
+        if (p.hunger <= 0) {
+          p.hungerDamageTick -= dt;
+          if (p.hungerDamageTick <= 0) {
+            p.hp -= 3;
+            p.hungerDamageTick = 1;
+          }
+        }
+
+        let moveX = 0;
+        let moveY = 0;
+        if (keys.has("KeyW")) moveY -= 1;
+        if (keys.has("KeyS")) moveY += 1;
+        if (keys.has("KeyA")) moveX -= 1;
+        if (keys.has("KeyD")) moveX += 1;
+        const dir = normalize(moveX, moveY);
+        const speed = p.onBoat ? 0 : p.speed;
+        if (!p.onBoat) {
+          const nx = p.x + dir.x * speed * dt;
+          const ny = p.y + dir.y * speed * dt;
+          if (!isWater(nx, ny)) {
+            p.x = clamp(nx, 30, WORLD_W - 30);
+            p.y = clamp(ny, 30, WORLD_H - 30);
+          }
+        } else {
+          const boat = game.boats.find((b) => b.id === p.boatId);
+          if (boat) {
+            boat.vx = dir.x * 180;
+            boat.vy = dir.y * 180;
+            p.x = boat.x;
+            p.y = boat.y;
+          } else {
+            p.onBoat = false;
+            p.boatId = null;
+          }
+        }
+
+        p.facing = Math.atan2(mouse.worldY - p.y, mouse.worldX - p.x);
+
+        if (mouse.left && !game.buildMode && p.shootCooldown <= 0) {
+          shootProjectile(p, mouse.worldX, mouse.worldY, { friendly: true, faction: "player", damage: 18, speed: 560, radius: 5, life: 1.25 });
+          p.shootCooldown = 0.16;
+        }
+
+        if (game.selectedJob === 2 && keys.has("KeyJ") && p.coreRecallCooldown <= 0) {
+          p.x = BASE_POS.x;
+          p.y = BASE_POS.y + 120;
+          p.coreRecallCooldown = 18;
+          pushMessage("你以吸血秘術返回核心。", 2.8);
+        }
+
+        if (game.selectedJob === 5 && keys.has("KeyJ") && p.alienBurstCooldown <= 0) {
+          p.alienBurstCooldown = 6.5;
+          for (let i = 0; i < 8; i++) {
+            const a = (Math.PI * 2 * i) / 8;
+            shootProjectile({ x: p.x, y: p.y }, p.x + Math.cos(a) * 200, p.y + Math.sin(a) * 200, { friendly: true, faction: "player", damage: 22, speed: 460, radius: 6, life: 1.2 });
+          }
+          pushMessage("外星八連砲發動。", 2.4);
+        }
+
+        if (game.selectedJob === 5 && keys.has("KeyK") && p.alienSummonCooldown <= 0) {
+          p.alienSummonCooldown = 30;
+          spawnMinion(p.x + rand(-30, 30), p.y + rand(-30, 30), { gatherOnly: false });
+          pushMessage("外星小兵已召喚。", 2.4);
+        }
+
+        if (game.selectedJob === 4 && keys.has("KeyK")) {
+          keys.delete("KeyK");
+          const px = p.x + Math.cos(p.facing) * 90;
+          const py = p.y + Math.sin(p.facing) * 90;
+          if (!isWater(px, py)) {
+            pushMessage("要面向水面才能放船。", 2.8);
+          } else {
+            spawnBoat(px, py);
+            pushMessage("漁夫放出一艘新船。", 2.6);
+          }
+        }
+
+        if (game.selectedJob === 4 && keys.has("KeyJ")) {
+          keys.delete("KeyJ");
+          if (p.onBoat) {
+            p.onBoat = false;
+            p.boatId = null;
+            pushMessage("你離開了船。", 2.2);
+          } else {
+            let best = null;
+            let bestD = 120;
+            for (const boat of game.boats) {
+              const d = dist(p, boat);
+              if (d < bestD) { bestD = d; best = boat; }
+            }
+            if (best) {
+              p.onBoat = true;
+              p.boatId = best.id;
+              pushMessage("你登上了船。", 2.2);
+            }
+          }
+        }
+
+        game.camera.x = clamp(lerp(game.camera.x, p.x - SCREEN_W * 0.5, 0.14), 0, WORLD_W - SCREEN_W);
+        game.camera.y = clamp(lerp(game.camera.y, p.y - SCREEN_H * 0.5, 0.14), 0, WORLD_H - SCREEN_H);
+      }
+
+      function updateResources(dt) {
+        for (const node of game.resources) {
+          if (node.alive) continue;
+          node.respawn -= dt;
+          if (node.respawn <= 0) {
+            node.alive = true;
+            node.hp = node.maxHp;
+          }
+        }
+      }
+
+      function updatePoisonClouds(dt) {
+        for (const cloud of game.poisonClouds) {
+          cloud.life -= dt;
+          if (cloud.life <= 0) continue;
+          cloud.tick -= dt;
+          if (cloud.tick <= 0) {
+            for (const monster of game.monsters) {
+              if (!monster.alive || monster.faction !== "monster") continue;
+              if (dist(cloud, monster) <= cloud.radius) {
+                damageMonster(monster, cloud.damage, { poison: true, poisonDuration: cloud.poisonDuration, source: "player" });
+              }
+            }
+            cloud.tick = 0.55;
+          }
+        }
+        game.poisonClouds = game.poisonClouds.filter((c) => c.life > 0);
+      }
+
+      function updateProjectiles(dt) {
+        for (const proj of game.projectiles) {
+          proj.x += proj.vx * dt;
+          proj.y += proj.vy * dt;
+          proj.life -= dt;
+          if (proj.life <= 0) {
+            if (proj.poison && proj.friendly) {
+              game.poisonClouds.push({ x: proj.x, y: proj.y, radius: 86, life: 4.6, tick: 0.2, damage: game.selectedJob === 6 ? 8 : 5, poisonDuration: game.selectedJob === 6 ? 6.5 : 5 });
+            }
+            continue;
+          }
+          if (!proj.friendly) {
+            if (dist(game.player, proj) <= game.player.radius + proj.radius) {
+              let dmg = proj.damage;
+              if (game.selectedJob === 6) dmg = Math.round(dmg * 0.72);
+              if (game.hasArmor) dmg = Math.round(dmg * 0.72);
+              game.player.hp -= Math.max(1, dmg);
+              proj.life = 0;
+              continue;
+            }
+            for (const minion of game.minions) {
+              if (!minion.alive) continue;
+              if (dist(minion, proj) <= 14 + proj.radius) {
+                const scale = minion.elite ? 0.33 : 1;
+                minion.hp -= Math.max(1, Math.round(proj.damage * scale));
+                if (minion.hp <= 0) minion.alive = false;
+                proj.life = 0;
+                break;
+              }
+            }
+          } else {
+            for (const monster of game.monsters) {
+              if (!monster.alive) continue;
+              if (monster.faction === "green" && proj.faction === "green") continue;
+              if (monster.faction === "monster" && proj.faction === "player") {
+                if (dist(monster, proj) <= monster.radius + proj.radius) {
+                  damageMonster(monster, proj.damage, { poison: proj.poison, poisonDuration: proj.poisonDuration, source: "player" });
+                  if (proj.bomb) explodeBomb(proj.x, proj.y, proj.splash, proj.damage);
+                  proj.life = 0;
+                  break;
+                }
+              }
+              if (monster.faction === "green" && proj.faction === "player" && dist(monster, proj) <= monster.radius + proj.radius) {
+                damageMonster(monster, proj.damage, { poison: proj.poison, poisonDuration: proj.poisonDuration, source: "player" });
+                if (proj.bomb) explodeBomb(proj.x, proj.y, proj.splash, proj.damage);
+                proj.life = 0;
+                break;
+              }
+            }
+            for (const structure of game.greenStructures) {
+              if (!structure.alive) continue;
+              if (proj.faction !== "player") continue;
+              if (dist(structure, proj) <= structure.radius + proj.radius) {
+                structure.hp -= proj.damage;
+                if (proj.bomb) explodeBomb(proj.x, proj.y, proj.splash, proj.damage);
+                proj.life = 0;
+                break;
+              }
+            }
+          }
+        }
+        game.projectiles = game.projectiles.filter((p) => p.life > 0);
+      }
+
+      function explodeBomb(x, y, radius, damage) {
+        for (const monster of game.monsters) {
+          if (!monster.alive) continue;
+          if (dist({ x, y }, monster) <= radius) {
+            damageMonster(monster, damage, { source: "player" });
+          }
+        }
+        for (const structure of game.greenStructures) {
+          if (!structure.alive) continue;
+          if (dist({ x, y }, structure) <= radius) structure.hp -= damage;
+        }
+      }
+
+      function waveMonsterCount() {
+        return game.monsters.filter((m) => m.alive && m.faction === "monster" && m.type !== "boss").length;
+      }
+
+      function spawnWave(dt) {
+        game.waveTimer -= dt;
+        if (game.waveTimer > 0) return;
+        const targetCount = 8 + game.day * 2 + game.stage * 4 + (game.inCultFortress ? 8 : 0);
+        if (waveMonsterCount() < targetCount) {
+          const count = clamp(3 + game.day + game.stage, 3, 16);
+          for (let i = 0; i < count; i++) {
+            const edge = Math.floor(rand(0, 4));
+            const pos = { x: 0, y: 0 };
+            if (edge === 0) { pos.x = rand(BASE_POS.x - 480, BASE_POS.x + 480); pos.y = BASE_POS.y - 720; }
+            if (edge === 1) { pos.x = rand(BASE_POS.x + 560, BASE_POS.x + 960); pos.y = rand(BASE_POS.y - 580, BASE_POS.y + 580); }
+            if (edge === 2) { pos.x = rand(BASE_POS.x - 960, BASE_POS.x - 560); pos.y = rand(BASE_POS.y - 580, BASE_POS.y + 580); }
+            if (edge === 3) { pos.x = rand(BASE_POS.x - 580, BASE_POS.x + 580); pos.y = BASE_POS.y + 760; }
+            if (isWater(pos.x, pos.y)) continue;
+            const roll = Math.random();
+            let type = "slime";
+            if (roll > 0.86) type = "darkMage";
+            else if (roll > 0.72) type = "knight";
+            else if (roll > 0.54) type = "archer";
+            else if (roll > 0.4) type = "brute";
+            spawnMonster(type, pos.x, pos.y);
+          }
+          pushMessage("新的敵怪波次來襲。", 2.8);
+        }
+        game.waveTimer = Math.max(2.8, 10 - game.day * 0.32 - game.stage * 0.75);
+      }
+
+      function ensureGreenStructuresSpawn(dt) {
+        if (game.greenCountryOwnedByPlayer) return;
+        for (const structure of game.greenStructures) {
+          if (!structure.alive) continue;
+          structure.spawnCooldown -= dt;
+          if (structure.hp <= 0) {
+            structure.alive = false;
+            pushMessage(structure.type === "hall" ? "綠國議事廳被摧毀了。" : structure.type === "camp" ? "綠國軍營被摧毀了。" : "綠國房屋被摧毀了。", 3);
+            continue;
+          }
+          if (structure.spawnCooldown > 0) continue;
+          if (structure.type === "camp") {
+            spawnGreenGuard(structure.x + rand(-20, 20), structure.y + 30);
+            structure.spawnCooldown = 30;
+          } else if (structure.type === "house") {
+            spawnGreenVillager(structure.x + rand(-18, 18), structure.y + 24);
+            structure.spawnCooldown = 40;
+          } else {
+            spawnGreenMage(structure.x + rand(-24, 24), structure.y + 36);
+            structure.spawnCooldown = 30;
+          }
+        }
+      }
+
+      function updateGreenCountryAssault() {
+        if (game.greenCountryOwnedByPlayer) return;
+        const greenUnits = game.monsters.filter((m) => m.alive && m.faction === "green");
+        if (greenUnits.length < GREEN_COUNTRY_SUMMON_THRESHOLD) {
+          game.greenCountryAssaultTriggered = false;
+          return;
+        }
+        if (game.greenCountryAssaultTriggered || greenUnits.some((m) => m.duty === "assault")) return;
+        game.greenCountryAssaultTriggered = true;
+
+        greenUnits.sort((a, b) => {
+          const rank = (m) => m.type === "greenGuard" ? 3 : m.type === "greenMage" ? 2 : 1;
+          const diff = rank(b) - rank(a);
+          return diff || dist(a, BASE_POS) - dist(b, BASE_POS);
+        });
+        greenUnits.forEach((m) => { m.duty = "normal"; });
+        greenUnits.slice(0, GREEN_COUNTRY_ASSAULT_COUNT).forEach((m) => {
+          m.duty = "assault";
+          m.provoked = true;
+        });
+        greenUnits.slice(GREEN_COUNTRY_ASSAULT_COUNT, GREEN_COUNTRY_ASSAULT_COUNT + GREEN_COUNTRY_DEFENDER_COUNT).forEach((m) => {
+          m.duty = "defend";
+        });
+        pushMessage("綠國集結大軍：25位生物朝核心進軍，15位留守綠國。", 5);
+      }
+
+      function findTargetForMonster(monster) {
+        if (monster.faction === "green") {
+          if (monster.duty === "assault") {
+            let target = { x: BASE_POS.x, y: BASE_POS.y };
+            let nearest = dist(monster, target);
+            for (const building of game.buildings) {
+              if (!building.alive) continue;
+              const d = dist(monster, building);
+              if (d < nearest) { nearest = d; target = building; }
+            }
+            for (const minion of game.minions) {
+              if (!minion.alive) continue;
+              const d = dist(monster, minion);
+              if (d < nearest) { nearest = d; target = minion; }
+            }
+            if (dist(monster, game.player) < nearest) target = game.player;
+            return target;
+          }
+          let intruders = [];
+          if (isGreenCountryArea(game.player)) intruders.push(game.player);
+          intruders.push(...game.minions.filter((m) => m.alive && isGreenCountryArea(m)));
+          intruders.push(...game.buildings.filter((b) => b.alive && isGreenCountryArea(b)));
+          if (monster.provoked || intruders.length > 0) {
+            return intruders.sort((a, b) => dist(monster, a) - dist(monster, b))[0] || game.player;
+          }
+          return null;
+        }
+        let target = game.player;
+        let nearest = dist(monster, game.player);
+        for (const minion of game.minions) {
+          if (!minion.alive) continue;
+          const d = dist(monster, minion);
+          if (d < nearest) { nearest = d; target = minion; }
+        }
+        for (const building of game.buildings) {
+          if (!building.alive) continue;
+          const d = dist(monster, building);
+          if (d < nearest) { nearest = d; target = building; }
+        }
+        if (dist(monster, BASE_POS) < nearest) target = { x: BASE_POS.x, y: BASE_POS.y, isCore: true };
+        return target;
+      }
+
+      function updateMonsters(dt) {
+        updateGreenCountryAssault();
+        for (const monster of game.monsters) {
+          if (!monster.alive) continue;
+          monster.attackCooldown -= dt;
+          monster.specialCooldown -= dt;
+          monster.farmTimer -= dt;
+          monster.poisonTimer -= dt;
+
+          if (monster.poisonTimer > 0) {
+            monster.poisonTick -= dt;
+            if (monster.poisonTick <= 0) {
+              const dmg = (game.selectedJob === 6 ? 7 : 4) + (game.hasPoisonUpgrade ? 5 : 0);
+              damageMonster(monster, dmg, { source: "player" });
+              monster.poisonTick = 0.55;
+            }
+          }
+          if (!monster.alive) continue;
+
+          if (monster.type === "boss" && !monster.enraged && monster.hp <= monster.maxHp * 0.5) {
+            monster.enraged = true;
+            monster.damage += 12;
+            monster.speed += 26;
+            pushMessage("灰暗魔王進入第二階段。", 4.2);
+          }
+
+          if (monster.faction === "green" && !monster.provoked && monster.duty !== "assault") {
+            if (monster.type === "greenVillager") {
+              let ripeCrop = null;
+              let best = 180;
+              for (const crop of game.crops) {
+                if (!crop.alive || !crop.ripe) continue;
+                const d = dist(monster, crop);
+                if (d < best) { best = d; ripeCrop = crop; }
+              }
+              if (ripeCrop) {
+                const d = normalize(ripeCrop.x - monster.x, ripeCrop.y - monster.y);
+                monster.x += d.x * monster.speed * 0.34 * dt;
+                monster.y += d.y * monster.speed * 0.34 * dt;
+                if (best < 20) {
+                  ripeCrop.alive = false;
+                  for (const ally of game.monsters) {
+                    if (ally.alive && ally.faction === "green" && dist(ally, monster) < 220) ally.hp = Math.min(ally.maxHp, ally.hp + 4);
+                  }
+                }
+                continue;
+              }
+            }
+
+            if (monster.type === "greenVillager" && monster.farmTimer <= 0) {
+              let pos = { x: monster.x + rand(-18, 18), y: monster.y + rand(-18, 18) };
+              for (const plot of greenFarmPlots()) {
+                const occupied = game.crops.some((crop) => crop.alive && dist(crop, plot) < 18);
+                if (!occupied) { pos = plot; break; }
+              }
+              game.crops.push({ x: pos.x, y: pos.y, life: 8, pulse: 1, alive: true, ripe: false });
+              for (const ally of game.monsters) {
+                if (ally.alive && ally.faction === "green" && dist(ally, monster) < 220) ally.hp = Math.min(ally.maxHp, ally.hp + 6);
+              }
+              monster.farmTimer = rand(5, 8.5);
+            }
+
+            if (dist(monster, game.player) < 96 && game.messages.every((m) => m.text !== "綠國守民正在戒備，請先保持距離。")) {
+              pushMessage("綠國守民正在戒備，請先保持距離。", 2.4);
+            }
+
+            if (dist(monster, { x: monster.roamX, y: monster.roamY }) < 18 || Math.random() < 0.008) {
+              const roamRadius = monster.type === "greenGuard" ? 150 : monster.type === "greenMage" ? 110 : 85;
+              monster.roamX = clamp(monster.homeX + rand(-roamRadius, roamRadius), GREEN_COUNTRY.x - GREEN_COUNTRY.w * 0.5, GREEN_COUNTRY.x + GREEN_COUNTRY.w * 0.5);
+              monster.roamY = clamp(monster.homeY + rand(-roamRadius, roamRadius), GREEN_COUNTRY.y - GREEN_COUNTRY.h * 0.5, GREEN_COUNTRY.y + GREEN_COUNTRY.h * 0.5);
+            }
+            const roamDir = normalize(monster.roamX - monster.x, monster.roamY - monster.y);
+            monster.x += roamDir.x * monster.speed * (monster.type === "greenGuard" ? 0.42 : 0.32) * dt;
+            monster.y += roamDir.y * monster.speed * (monster.type === "greenGuard" ? 0.42 : 0.32) * dt;
+            continue;
+          }
+
+          const target = findTargetForMonster(monster);
+          if (!target) continue;
+          let speed = monster.speed;
+          if (monster.type === "knight" || monster.type === "greenGuard") {
+            if (monster.specialCooldown <= 0) {
+              monster.sprintTimer = monster.type === "greenGuard" ? 1.1 : 0.85;
+              monster.specialCooldown = monster.type === "greenGuard" ? 4 : 5;
+            }
+          }
+          if (monster.sprintTimer > 0) {
+            monster.sprintTimer -= dt;
+            speed *= monster.type === "greenGuard" ? 2.9 : 2.45;
+          }
+          const d = normalize(target.x - monster.x, target.y - monster.y);
+          const nx = monster.x + d.x * speed * dt;
+          const ny = monster.y + d.y * speed * dt;
+          if (!isWater(nx, ny)) {
+            monster.x = clamp(nx, 20, WORLD_W - 20);
+            monster.y = clamp(ny, 20, WORLD_H - 20);
+          }
+
+          const targetDist = dist(monster, target);
+          if ((monster.type === "archer" || monster.type === "greenMage") && monster.attackCooldown <= 0 && targetDist < 420) {
+            const count = monster.type === "greenMage" ? 3 : 1;
+            for (let i = 0; i < count; i++) {
+              const spread = count === 1 ? 0 : (i - 1) * 0.16;
+              const base = ang(monster, target) + spread;
+              shootProjectile(monster, monster.x + Math.cos(base) * 200, monster.y + Math.sin(base) * 200, {
+                friendly: true,
+                faction: monster.faction === "green" ? "green" : "enemy",
+                damage: monster.damage,
+                speed: monster.type === "greenMage" ? 300 : 470,
+                radius: monster.type === "greenMage" ? 8 : 5,
+                poison: monster.type === "greenMage",
+                poisonDuration: monster.type === "greenMage" ? 5 : 0
+              });
+            }
+            monster.attackCooldown = monster.type === "greenMage" ? 1.9 : 1.7;
+          } else if (monster.type === "darkMage" && monster.attackCooldown <= 0 && targetDist < 430) {
+            const baseAngle = ang(monster, target);
+            for (let i = -3; i <= 3; i++) {
+              const a = baseAngle + i * 0.14;
+              shootProjectile(monster, monster.x + Math.cos(a) * 240, monster.y + Math.sin(a) * 240, {
+                friendly: true,
+                faction: "enemy",
+                damage: monster.damage,
+                speed: 290,
+                radius: 9,
+                poison: true,
+                poisonDuration: 4.8
+              });
+            }
+            monster.attackCooldown = 1.8;
+          } else if (monster.type === "boss" && monster.attackCooldown <= 0 && targetDist < 390) {
+            const shots = monster.enraged ? 3 : 1;
+            for (let i = 0; i < shots; i++) {
+              const spread = shots === 1 ? 0 : (i - 1) * 0.28;
+              const a = ang(monster, target) + spread;
+              shootProjectile(monster, monster.x + Math.cos(a) * 240, monster.y + Math.sin(a) * 240, {
+                friendly: true,
+                faction: "enemy",
+                damage: shots === 1 ? monster.damage : Math.max(1, monster.damage - 4),
+                speed: monster.enraged ? 430 : 360,
+                radius: monster.enraged ? 14 : 11
+              });
+            }
+            monster.attackCooldown = monster.enraged ? 0.52 : 0.78;
+          } else if (targetDist <= monster.radius + (target.radius || 22) + 4 && monster.attackCooldown <= 0) {
+            if (target === game.player) {
+              let incoming = monster.damage;
+              if (game.selectedJob === 6) incoming = Math.round(incoming * 0.72);
+              if (game.hasArmor) incoming = Math.round(incoming * 0.72);
+              game.player.hp -= Math.max(1, incoming);
+            } else if (target.isCore) {
+              game.player.cores -= monster.damage;
+            } else if (target.hp !== undefined) {
+              target.hp -= monster.faction === "green" && target.friendly ? 0 : monster.damage;
+              if (target.hp <= 0 && target.alive !== undefined) target.alive = false;
+            }
+            monster.attackCooldown = monster.type === "boss" ? 0.68 : 0.92;
+          }
+        }
+      }
+
+      function updateMinions(dt) {
+        for (const minion of game.minions) {
+          if (!minion.alive) continue;
+          minion.attackCooldown -= dt;
+          minion.specialCooldown -= dt;
+          minion.gatherCooldown -= dt;
+
+          if (minion.gatherOnly) {
+            let resource = null;
+            let best = 170;
+            for (const node of game.resources) {
+              if (!node.alive) continue;
+              const d = dist(minion, node);
+              if (d < best) { best = d; resource = node; }
+            }
+            if (resource) {
+              const d = normalize(resource.x - minion.x, resource.y - minion.y);
+              minion.x += d.x * minion.speed * 0.7 * dt;
+              minion.y += d.y * minion.speed * 0.7 * dt;
+              if (best < 20 && minion.gatherCooldown <= 0) {
+                resource.hp -= 1;
+                if (resource.hp <= 0) {
+                  resource.alive = false;
+                  resource.respawn = rand(26, 44);
+                  if (resource.type === "tree") game.inventory.wood += 8;
+                  if (resource.type === "stone") game.inventory.stone += 8;
+                  if (resource.type === "grass") game.inventory.fiber += 4;
+                  if (resource.type === "crystal") game.inventory.crystal += 3;
+                }
+                minion.gatherCooldown = 0.9;
+              }
+            }
+            continue;
+          }
+
+          let target = null;
+          let best = 360;
+          for (const monster of game.monsters) {
+            if (!monster.alive || monster.faction === "green") continue;
+            const d = dist(minion, monster);
+            if (d < best) { best = d; target = monster; }
+          }
+          if (target) {
+            const d = normalize(target.x - minion.x, target.y - minion.y);
+            minion.x += d.x * minion.speed * dt * 0.92;
+            minion.y += d.y * minion.speed * dt * 0.92;
+            if (minion.elite && minion.specialCooldown <= 0) {
+              const baseAngle = ang(minion, target);
+              for (let i = 0; i < 10; i++) {
+                const spread = (i - 4.5) * 0.065;
+                shootProjectile(minion, minion.x + Math.cos(baseAngle + spread) * 200, minion.y + Math.sin(baseAngle + spread) * 200, {
+                  friendly: true,
+                  faction: "player",
+                  damage: 22,
+                  speed: 520,
+                  radius: 5,
+                  life: 1.1
+                });
+              }
+              minion.specialCooldown = 2.8;
+            }
+            if (best < 36 && minion.attackCooldown <= 0) {
+              damageMonster(target, minion.damage, { poison: minion.elite, poisonDuration: minion.elite ? 4.5 : 0, source: "player" });
+              minion.attackCooldown = minion.elite ? 0.7 : 0.95;
+            }
+          } else {
+            if (dist(minion, { x: minion.roamX, y: minion.roamY }) < 20 || Math.random() < 0.008) {
+              minion.roamX = minion.x + rand(-120, 120);
+              minion.roamY = minion.y + rand(-120, 120);
+            }
+            const d = normalize(minion.roamX - minion.x, minion.roamY - minion.y);
+            minion.x += d.x * minion.speed * dt * 0.4;
+            minion.y += d.y * minion.speed * dt * 0.4;
+          }
+        }
+        game.minions = game.minions.filter((m) => m.alive);
+      }
+
+      function updateBuildings(dt) {
+        for (const building of game.buildings) {
+          if (!building.alive) continue;
+          if (building.hp <= 0) {
+            building.alive = false;
+            continue;
+          }
+          building.fireCooldown -= dt;
+          building.healTick -= dt;
+          building.summonCooldown -= dt;
+
+          if (building.type === "camp" && dist(game.player, building) < 110 && building.healTick <= 0) {
+            game.player.hp = Math.min(game.player.maxHp, game.player.hp + 4);
+            building.healTick = 0.35;
+          }
+
+          if (building.type === "turret" && building.fireCooldown <= 0) {
+            let target = null;
+            let best = 360 + game.day * 6;
+            for (const monster of game.monsters) {
+              if (!monster.alive || monster.faction === "green") continue;
+              const d = dist(building, monster);
+              if (d < best) { best = d; target = monster; }
+            }
+            if (target) {
+              shootProjectile(building, target.x, target.y, { friendly: true, faction: "player", damage: 20, speed: 560, radius: 6 });
+              building.fireCooldown = 0.6;
+            }
+          }
+
+          if (building.type === "darkMageTower") {
+            if (building.fireCooldown <= 0) {
+              let target = null;
+              let best = 420;
+              for (const monster of game.monsters) {
+                if (!monster.alive || monster.faction === "green") continue;
+                const d = dist(building, monster);
+                if (d < best) { best = d; target = monster; }
+              }
+              if (target) {
+                const base = ang(building, target);
+                for (let i = -2; i <= 2; i++) {
+                  shootProjectile(building, building.x + Math.cos(base + i * 0.1) * 200, building.y + Math.sin(base + i * 0.1) * 200, {
+                    friendly: true,
+                    faction: "player",
+                    damage: game.hasPoisonUpgrade ? 16 : 10,
+                    speed: 300,
+                    radius: 8,
+                    poison: true,
+                    poisonDuration: game.hasPoisonUpgrade ? 7 : 5.2
+                  });
+                }
+                building.fireCooldown = 1.6;
+              }
+            }
+            if (building.summonCooldown <= 0) {
+              spawnMinion(building.x + rand(-20, 20), building.y + rand(-20, 20), { gatherOnly: true });
+              building.summonCooldown = 60;
+            }
+          }
+        }
+      }
+
+      function updateBoats(dt) {
+        for (const boat of game.boats) {
+          boat.fireCooldown -= dt;
+          boat.x = clamp(boat.x + boat.vx * dt, 30, WORLD_W - 30);
+          boat.y = clamp(boat.y + boat.vy * dt, 30, WORLD_H - 30);
+          if (!isWater(boat.x, boat.y)) {
+            boat.vx *= -0.6;
+            boat.vy *= -0.6;
+          }
+          if (Math.random() < 0.01) {
+            boat.vx += rand(-40, 40);
+            boat.vy += rand(-30, 30);
+          }
+          if (boat.fireCooldown <= 0) {
+            let target = null;
+            let best = 420;
+            for (const monster of game.monsters) {
+              if (!monster.alive || monster.faction === "green") continue;
+              const d = dist(boat, monster);
+              if (d < best) { best = d; target = monster; }
+            }
+            if (target) {
+              shootProjectile(boat, target.x, target.y, { friendly: true, faction: "player", damage: 18, speed: 500, radius: 6 });
+              shootProjectile(boat, target.x + 12, target.y - 18, { friendly: true, faction: "player", damage: 18, speed: 500, radius: 6 });
+              boat.fireCooldown = 0.7;
+            }
+          }
+          if (game.player.onBoat && game.player.boatId === boat.id) {
+            game.player.x = boat.x;
+            game.player.y = boat.y;
+          }
+        }
+      }
+
+      function updateCrops(dt) {
+        for (const crop of game.crops) {
+          if (!crop.alive) continue;
+          crop.life -= dt;
+          crop.pulse -= dt;
+          crop.ripe = crop.life <= 4;
+          if (crop.ripe && crop.pulse <= 0) {
+            for (const monster of game.monsters) {
+              if (monster.alive && monster.faction === "green" && dist(monster, crop) < 140) {
+                monster.hp = Math.min(monster.maxHp, monster.hp + 3);
+              }
+            }
+            crop.pulse = 1;
+          }
+          if (crop.life <= 0) crop.alive = false;
+        }
+        game.crops = game.crops.filter((c) => c.alive);
+      }
+
+      function updateVillageEvent() {
+        if (game.stage === 3 && !game.villageEventStarted && isVillageArea(game.player)) {
+          game.villageEventStarted = true;
+          for (let i = 0; i < 15; i++) {
+            spawnMonster(i % 4 === 0 ? "archer" : i % 5 === 0 ? "knight" : "slime", VILLAGE_POS.x + rand(-240, 220), VILLAGE_POS.y + rand(-200, 180));
+          }
+          for (let i = 0; i < 3; i++) {
+            spawnMonster("darkMage", VILLAGE_POS.x + rand(-180, 180), VILLAGE_POS.y + rand(-140, 140));
+          }
+          pushMessage("你進入了損壞的村莊，山匪與黑暗大法師已現身。", 4.6);
+        }
+      }
+
+      function updateVillageBase(dt) {
+        if (game.stage !== 3 || !game.villageEventStarted || game.villageBaseDestroyed) return;
+        const fakeBase = { x: VILLAGE_BASE_POS.x, y: VILLAGE_BASE_POS.y, radius: 70 };
+        for (const proj of game.projectiles) {
+          if (!proj.friendly || proj.faction !== "player") continue;
+          if (dist(proj, fakeBase) <= 70 + proj.radius) {
+            game.villageBaseHp -= proj.damage;
+            proj.life = 0;
+          }
+        }
+        if (dist(game.player, fakeBase) < 88 && mouse.left && game.player.meleeCooldown > 0.45) {
+          game.villageBaseHp -= 28;
+        }
+        if (game.villageBaseHp <= 0 && !game.villageBaseDestroyed) {
+          game.villageBaseDestroyed = true;
+          game.emeraldDropped = true;
+          pushMessage("藍基地已被摧毀，綠寶石掉落了。", 4);
+        }
+        if (game.emeraldDropped && !game.carryingEmerald && dist(game.player, VILLAGE_BASE_POS) < 100) {
+          game.carryingEmerald = true;
+          game.inventory.emerald = 1;
+          pushMessage("你撿起了綠寶石，快帶回核心。", 3.4);
+        }
+        if (game.carryingEmerald && dist(game.player, BASE_POS) < 120) {
+          game.carryingEmerald = false;
+          game.inventory.emerald = 0;
+          game.emeraldDelivered = true;
+          addBuilding("darkMageTower", BASE_POS.x + 220, BASE_POS.y - 210);
+          pushMessage("綠寶石已送回核心，你獲得了一隻黑暗小法師。", 4.2);
+        }
+      }
+
+      function checkStageProgress() {
+        if (game.stage === 1) {
+          if (game.inventory.wood >= 40 && game.inventory.stone >= 28 && game.totalDarkMageKills >= 4) {
+            game.stage = 2;
+            pushMessage("第一關完成，開始建立更強的防線。", 4);
+          }
+        } else if (game.stage === 2) {
+          const turrets = game.buildings.filter((b) => b.alive && b.type === "turret").length;
+          const camps = game.buildings.filter((b) => b.alive && b.type === "camp").length;
+          const darkMages = game.buildings.filter((b) => b.alive && b.type === "darkMageTower").length;
+          if (turrets >= 9 && camps >= 3 && darkMages >= 2 && game.totalMonsterKills >= 50) {
+            game.stage = 3;
+            pushMessage("第二關完成，前往損壞的村莊。", 4);
+          }
+        } else if (game.stage === 3) {
+          if (game.stage3BanditKills >= 15 && game.stage3DarkMageKills >= 3 && game.villageBaseDestroyed && game.emeraldDelivered) {
+            game.stage = 4;
+            pushMessage("第三關完成，前往黑色禁地迎戰最終魔王。", 4.6);
+          }
+        } else if (game.stage === 4) {
+          if (!game.bossSpawned && isBossZoneArea(game.player) && keys.has("KeyE")) {
+            keys.delete("KeyE");
+            spawnMonster("boss", BOSS_ZONE_POS.x, BOSS_ZONE_POS.y, { bossKind: "final" });
+            game.bossSpawned = true;
+            pushMessage("灰暗魔王已降臨。", 4.4);
+          }
+        }
+      }
+
+      function tryPlaceBuilding() {
+        if (!game.buildMode || !mouse.left) return;
+        const type = game.selectedBuild;
+        const def = BUILDINGS[type];
+        if (!def) return;
+        const pos = { x: mouse.worldX, y: mouse.worldY };
+        if (isWater(pos.x, pos.y) || dist(pos, BASE_POS) < 70) return;
+        if (game.greenStructures.some((s) => s.alive && dist(pos, s) < s.radius + 40)) return;
+        if (game.buildings.some((b) => b.alive && dist(pos, b) < b.radius + 36)) return;
+        for (const [key, value] of Object.entries(def.cost)) {
+          if (game.inventory[key] < value) {
+            pushMessage("材料不足。", 2.4);
+            return;
+          }
+        }
+        Object.entries(def.cost).forEach(([key, value]) => game.inventory[key] -= value);
+        addBuilding(type, pos.x, pos.y);
+        pushMessage(`${def.name} 已建造。`, 2.3);
+        mouse.left = false;
+      }
+
+      function updateMessages(dt) {
+        for (const m of game.messages) m.time -= dt;
+        game.messages = game.messages.filter((m) => m.time > 0);
+      }
+
+      function autosave(dt) {
+        game.autosaveTimer -= dt;
+        if (game.autosaveTimer <= 0) {
+          saveLocal();
+          game.autosaveTimer = 24;
+        }
+      }
+
+      function savePayload() {
+        return {
+          version: 1,
+          game: {
+            ...game,
+            permanentRubies: undefined,
+            messages: [],
+            pointerHint: "",
+            camera: undefined
+          }
+        };
+      }
+
+      function saveLocal() {
+        localStorage.setItem(SAVE_KEY, JSON.stringify(savePayload()));
+      }
+
+      function loadLocal() {
+        const raw = localStorage.getItem(SAVE_KEY);
+        if (!raw) return false;
+        const data = JSON.parse(raw);
+        restoreGame(data.game);
+        return true;
+      }
+
+      function exportTxtSave() {
+        const payload = `${TXT_SAVE_PREFIX}\n${JSON.stringify(savePayload())}`;
+        const blob = new Blob([payload], { type: "text/plain;charset=utf-8" });
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = "fightgame-web-save.txt";
+        a.click();
+        URL.revokeObjectURL(a.href);
+      }
+
+      function restoreGame(saved) {
+        const fresh = createState();
+        game = Object.assign(fresh, saved);
+        game.permanentRubies = getPermanentRubies();
+        game.messages = [];
+        game.camera = { x: clamp(game.player.x - SCREEN_W * 0.5, 0, WORLD_W - SCREEN_W), y: clamp(game.player.y - SCREEN_H * 0.5, 0, WORLD_H - SCREEN_H), shake: 0 };
+        game.scene = "playing";
+        game.pause = false;
+      }
+
+      importInput.addEventListener("change", async (event) => {
+        const file = event.target.files[0];
+        if (!file) return;
+        const text = await file.text();
+        if (!text.startsWith(TXT_SAVE_PREFIX)) {
+          pushMessage("這不是正確的文字存檔。", 3);
+          return;
+        }
+        const json = text.slice(TXT_SAVE_PREFIX.length).trim();
+        const data = JSON.parse(json);
+        restoreGame(data.game);
+        pushMessage("文字存檔已載入。", 3);
+      });
+
+      function update(dt) {
+        if (game.scene === "title") return;
+        if (game.scene === "intro") {
+          game.introTimer += dt;
+          if (game.introTimer >= 8.5) game.scene = "playing";
+          return;
+        }
+        if (game.scene !== "playing" || game.pause) return;
+
+        game.elapsed += dt;
+        game.dayTimer += dt;
+        if (game.dayTimer >= 60) {
+          game.day += 1;
+          game.dayTimer = 0;
+          pushMessage(`第 ${game.day} 天開始，威脅正在升高。`, 3.5);
+        }
+        game.difficulty = 1 + game.day * 0.08 + game.stage * 0.14 + (game.inCultFortress ? 0.8 : 0);
+
+        updatePlayer(dt);
+        updateResources(dt);
+        updatePoisonClouds(dt);
+        updateProjectiles(dt);
+        updateMonsters(dt);
+        updateMinions(dt);
+        updateBuildings(dt);
+        updateBoats(dt);
+        updateCrops(dt);
+        ensureGreenStructuresSpawn(dt);
+        triggerGreenCountryBossIfDefeated();
+        updateGreenCountryBossSummon(dt);
+        spawnWave(dt);
+        updateVillageEvent();
+        updateVillageBase(dt);
+        checkStageProgress();
+        updateMessages(dt);
+        autosave(dt);
+        tryPlaceBuilding();
+
+        if (game.player.hp <= 0 || game.player.cores <= 0) {
+          game.scene = "gameover";
+          saveLocal();
+        }
+      }
+
+      function drawTerrain(camera) {
+        const startX = Math.floor(camera.x / 64) * 64;
+        const startY = Math.floor(camera.y / 64) * 64;
+        for (let y = startY; y < camera.y + SCREEN_H + 64; y += 64) {
+          for (let x = startX; x < camera.x + SCREEN_W + 64; x += 64) {
+            let color = "#1d3a25";
+            if (isWater(x + 32, y + 32)) color = "#1c5064";
+            else if (isGreenCountryArea({ x: x + 32, y: y + 32 })) color = "#234e2f";
+            else if (isVillageArea({ x: x + 32, y: y + 32 })) color = "#4c3b31";
+            else if (isBossZoneArea({ x: x + 32, y: y + 32 })) color = "#26131a";
+            else if (isCultFortressArea({ x: x + 32, y: y + 32 })) color = "#2b2420";
+            ctx.fillStyle = color;
+            ctx.fillRect(x - camera.x, y - camera.y, 64, 64);
+          }
+        }
+      }
+
+      function drawWorld() {
+        const camera = game.camera;
+        drawTerrain(camera);
+
+        const zones = [
+          { pos: SHRINE_POS, label: "神社", color: "#d3efd0", size: 56 },
+          { pos: CULT_PORTAL_POS, label: "傳送門", color: "#d4afe8", size: 44 },
+          { pos: CULT_FORTRESS_PORTAL_POS, label: "回歸門", color: "#dcc0f0", size: 44 }
+        ];
+        for (const zone of zones) {
+          const p = worldToScreen(zone.pos.x, zone.pos.y, camera);
+          ctx.fillStyle = "rgba(230,255,230,0.14)";
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, zone.size, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.strokeStyle = zone.color;
+          ctx.lineWidth = 4;
+          ctx.stroke();
+          ctx.fillStyle = zone.color;
+          ctx.font = "bold 24px 'Noto Sans TC', sans-serif";
+          ctx.textAlign = "center";
+          ctx.fillText(zone.label, p.x, p.y - zone.size - 10);
+        }
+
+        const greenLabel = worldToScreen(GREEN_COUNTRY.x, GREEN_COUNTRY.y, camera);
+        ctx.strokeStyle = game.greenCountryOwnedByPlayer ? "rgba(255, 212, 112, 0.88)" : "rgba(126, 224, 150, 0.82)";
+        ctx.lineWidth = 5;
+        ctx.strokeRect(greenLabel.x - 390, greenLabel.y - 280, 780, 560);
+        ctx.fillStyle = game.greenCountryOwnedByPlayer ? "rgba(120, 92, 32, 0.24)" : "rgba(32,102,54,0.24)";
+        ctx.fillRect(greenLabel.x - 360, greenLabel.y - 250, 720, 500);
+        ctx.fillStyle = game.greenCountryOwnedByPlayer ? "#ffefbf" : "#d6ffd9";
+        ctx.font = "bold 36px 'Noto Sans TC', sans-serif";
+        ctx.fillText(game.greenCountryOwnedByPlayer ? "綠國領地" : "綠國", greenLabel.x, greenLabel.y - 300);
+        ctx.font = "22px 'Noto Sans TC', sans-serif";
+        ctx.fillStyle = game.greenCountryOwnedByPlayer ? "#ffe2a6" : "#c5f7c9";
+        ctx.fillText(game.greenCountryOwnedByPlayer ? "已成為玩家地盤" : "左上邊境國度", greenLabel.x, greenLabel.y - 268);
+
+        const hall = greenHallPos();
+        const hallP = worldToScreen(hall.x, hall.y, camera);
+        ctx.fillStyle = "#59724d";
+        ctx.fillRect(hallP.x - 110, hallP.y - 80, 220, 160);
+        ctx.fillStyle = "#7d8f58";
+        ctx.fillRect(hallP.x - 150, hallP.y + 80, 300, 28);
+        ctx.fillStyle = "#ebf8dc";
+        ctx.font = "bold 20px 'Noto Sans TC', sans-serif";
+        ctx.fillText("綠國議事廳", hallP.x, hallP.y - 102);
+
+        for (const plot of greenFarmPlots()) {
+          const p = worldToScreen(plot.x, plot.y, camera);
+          ctx.fillStyle = "#6e5d33";
+          ctx.fillRect(p.x - 24, p.y - 12, 48, 24);
+        }
+
+        for (const crop of game.crops) {
+          if (!crop.alive) continue;
+          const p = worldToScreen(crop.x, crop.y, camera);
+          ctx.fillStyle = crop.ripe ? "#97d46a" : "#5f9d48";
+          ctx.fillRect(p.x - 8, p.y - 16, 16, 24);
+        }
+
+        for (const structure of game.greenStructures) {
+          if (!structure.alive) continue;
+          const p = worldToScreen(structure.x, structure.y, camera);
+          ctx.fillStyle = structure.type === "hall" ? "#70835a" : structure.type === "camp" ? "#53664b" : "#607651";
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, structure.radius, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = "#ecffe8";
+          ctx.font = "18px 'Noto Sans TC', sans-serif";
+          ctx.fillText(structure.type === "hall" ? "綠國議事廳" : structure.type === "camp" ? "綠國軍營" : "綠國房屋", p.x, p.y - structure.radius - 18);
+          drawBar(p.x - 46, p.y - structure.radius - 10, 92, 8, structure.hp / structure.maxHp, "#10170f", "#7ae47f");
+          ctx.fillStyle = "#d7f9de";
+          ctx.font = "16px 'Noto Sans TC', sans-serif";
+          ctx.fillText(`補兵 ${formatTime(structure.spawnCooldown)}`, p.x, p.y + structure.radius + 22);
+        }
+
+        const villageP = worldToScreen(VILLAGE_POS.x, VILLAGE_POS.y, camera);
+        ctx.fillStyle = "rgba(109,71,59,0.25)";
+        ctx.fillRect(villageP.x - 300, villageP.y - 220, 600, 440);
+        ctx.strokeStyle = "#c6a79e";
+        ctx.strokeRect(villageP.x - 300, villageP.y - 220, 600, 440);
+        ctx.fillStyle = "#ffe7da";
+        ctx.font = "bold 28px 'Noto Sans TC', sans-serif";
+        ctx.fillText("損壞的村莊", villageP.x, villageP.y - 240);
+        const baseP = worldToScreen(VILLAGE_BASE_POS.x, VILLAGE_BASE_POS.y, camera);
+        if (!game.villageBaseDestroyed) {
+          ctx.fillStyle = "#3b5d9f";
+          ctx.fillRect(baseP.x - 70, baseP.y - 55, 140, 110);
+          drawBar(baseP.x - 64, baseP.y - 72, 128, 10, game.villageBaseHp / game.villageBaseMaxHp, "#111", "#5eb0ff");
+        } else if (!game.emeraldDelivered) {
+          ctx.fillStyle = "#67db77";
+          ctx.beginPath();
+          ctx.arc(baseP.x, baseP.y, 20, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        const bossP = worldToScreen(BOSS_ZONE_POS.x, BOSS_ZONE_POS.y, camera);
+        ctx.strokeStyle = "#8b1f2e";
+        ctx.lineWidth = 6;
+        ctx.strokeRect(bossP.x - 180, bossP.y - 140, 360, 280);
+        ctx.fillStyle = "rgba(20,0,0,0.25)";
+        ctx.fillRect(bossP.x - 180, bossP.y - 140, 360, 280);
+        ctx.fillStyle = "#ffb5bf";
+        ctx.font = "bold 28px 'Noto Sans TC', sans-serif";
+        ctx.fillText("黑色禁地", bossP.x, bossP.y - 160);
+
+        for (const res of game.resources) {
+          if (!res.alive) continue;
+          const p = worldToScreen(res.x, res.y, camera);
+          if (p.x < -50 || p.x > SCREEN_W + 50 || p.y < -50 || p.y > SCREEN_H + 50) continue;
+          if (res.type === "tree") {
+            ctx.fillStyle = "#5d3316";
+            ctx.fillRect(p.x - 6, p.y + 12, 12, 26);
+            ctx.fillStyle = "#4e9555";
+            ctx.beginPath(); ctx.arc(p.x, p.y, 20, 0, Math.PI * 2); ctx.fill();
+          } else if (res.type === "stone") {
+            ctx.fillStyle = "#8d8a87";
+            ctx.beginPath(); ctx.arc(p.x, p.y, 18, 0, Math.PI * 2); ctx.fill();
+          } else if (res.type === "grass") {
+            ctx.fillStyle = "#89d16a";
+            ctx.fillRect(p.x - 12, p.y - 10, 24, 20);
+          } else if (res.type === "crystal") {
+            ctx.fillStyle = "#70f0ff";
+            ctx.beginPath();
+            ctx.moveTo(p.x, p.y - 22);
+            ctx.lineTo(p.x + 16, p.y + 6);
+            ctx.lineTo(p.x, p.y + 24);
+            ctx.lineTo(p.x - 16, p.y + 6);
+            ctx.closePath();
+            ctx.fill();
+          }
+        }
+
+        for (const building of game.buildings) {
+          if (!building.alive) continue;
+          const p = worldToScreen(building.x, building.y, camera);
+          ctx.fillStyle = {
+            wall: "#8f7f66",
+            turret: "#9b6a54",
+            camp: "#7f9353",
+            darkMageTower: "#684d8d",
+            house: "#7c644f"
+          }[building.type];
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, building.radius, 0, Math.PI * 2);
+          ctx.fill();
+          drawBar(p.x - 42, p.y - building.radius - 8, 84, 7, building.hp / building.maxHp, "#121212", "#9af08b");
+          if (building.type === "house") {
+            const eliteCount = game.minions.filter((m) => m.alive && m.elite && dist(m, building) < 220).length;
+            ctx.fillStyle = "#f6efcb";
+            ctx.font = "18px 'Noto Sans TC', sans-serif";
+            ctx.fillText(`菁英 ${eliteCount} / 5`, p.x, p.y - building.radius - 18);
+          }
+        }
+
+        for (const boat of game.boats) {
+          const p = worldToScreen(boat.x, boat.y, camera);
+          ctx.fillStyle = "#c2a06f";
+          ctx.beginPath();
+          ctx.ellipse(p.x, p.y, 34, 16, 0, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = "#f4edd1";
+          ctx.fillRect(p.x - 2, p.y - 22, 4, 22);
+        }
+
+        for (const cloud of game.poisonClouds) {
+          const p = worldToScreen(cloud.x, cloud.y, camera);
+          ctx.fillStyle = "rgba(106,216,100,0.22)";
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, cloud.radius, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        for (const proj of game.projectiles) {
+          const p = worldToScreen(proj.x, proj.y, camera);
+          ctx.fillStyle = proj.bomb ? "#ffbc67" : proj.poison ? "#6ae06d" : proj.faction === "enemy" ? "#ff8e86" : proj.faction === "green" ? "#d8ff8a" : "#f1f5ff";
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, proj.radius, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        for (const minion of game.minions) {
+          if (!minion.alive) continue;
+          const p = worldToScreen(minion.x, minion.y, camera);
+          ctx.fillStyle = minion.elite ? "#f0ca5f" : minion.gatherOnly ? "#9bd67e" : "#d2dad8";
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, minion.elite ? 14 : 11, 0, Math.PI * 2);
+          ctx.fill();
+          drawBar(p.x - 18, p.y - 26, 36, 5, minion.hp / minion.maxHp, "#121212", "#7ae47f");
+        }
+
+        for (const monster of game.monsters) {
+          if (!monster.alive) continue;
+          const p = worldToScreen(monster.x, monster.y, camera);
+          let color = "#d86d69";
+          if (monster.type === "brute") color = "#b84a3f";
+          if (monster.type === "archer") color = "#d6bf88";
+          if (monster.type === "knight") color = "#b4bdc8";
+          if (monster.type === "darkMage") color = "#6f52a5";
+          if (monster.type === "boss") color = "#3d0710";
+          if (monster.faction === "green") {
+            color = monster.type === "greenGuard" ? "#5a9c61" : monster.type === "greenVillager" ? "#84ba68" : "#4f7651";
+          }
+          if (monster.type === "knight" || monster.type === "greenGuard") {
+            ctx.fillStyle = monster.faction === "green" ? "#417951" : "#6b5c4b";
+            ctx.beginPath();
+            ctx.ellipse(p.x, p.y + 10, 24, 14, 0, 0, Math.PI * 2);
+            ctx.fill();
+          }
+          ctx.fillStyle = color;
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, monster.radius, 0, Math.PI * 2);
+          ctx.fill();
+          drawBar(p.x - 28, p.y - monster.radius - 10, 56, 6, monster.hp / monster.maxHp, "#171717", monster.faction === "green" ? "#98f397" : "#ff958f");
+          ctx.fillStyle = "#effff0";
+          ctx.font = "16px 'Noto Sans TC', sans-serif";
+          if (monster.type === "boss") ctx.fillText("灰暗魔王", p.x, p.y - monster.radius - 18);
+          if (monster.type === "darkMage") ctx.fillText("黑暗大法師", p.x, p.y - monster.radius - 18);
+          if (monster.type === "greenGuard") ctx.fillText("綠國守軍首衛", p.x, p.y - monster.radius - 18);
+          if (monster.type === "greenVillager") ctx.fillText("綠國農民", p.x, p.y - monster.radius - 18);
+          if (monster.type === "greenMage") ctx.fillText("綠國法師團", p.x, p.y - monster.radius - 18);
+        }
+
+        const p = worldToScreen(game.player.x, game.player.y, camera);
+        drawPlayer(p);
+      }
+
+      function drawPlayer(p) {
+        const colors = {
+          1: { body: "#d9dfde", accent: "#788482" },
+          2: { body: "#4d1c27", accent: "#de6175" },
+          3: { body: "#9f723f", accent: "#ecba74" },
+          4: { body: "#446b93", accent: "#8ecaff" },
+          5: { body: "#47857f", accent: "#aff9da" },
+          6: { body: "#9f8c40", accent: "#ffe283" }
+        }[game.selectedJob];
+        ctx.fillStyle = colors.body;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 18, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = colors.accent;
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 22, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.strokeStyle = "#fff";
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(p.x, p.y);
+        ctx.lineTo(p.x + Math.cos(game.player.facing) * 32, p.y + Math.sin(game.player.facing) * 32);
+        ctx.stroke();
+      }
+
+      function drawBar(x, y, w, h, ratio, bg, fg) {
+        ctx.fillStyle = bg;
+        ctx.fillRect(x, y, w, h);
+        ctx.fillStyle = fg;
+        ctx.fillRect(x + 1, y + 1, (w - 2) * clamp(ratio, 0, 1), h - 2);
+      }
+
+      function stageText() {
+        if (game.stage === 1) {
+          return [
+            `第一關：採集與神社`,
+            `木材 ${game.inventory.wood} / 40`,
+            `石材 ${game.inventory.stone} / 28`,
+            game.shrineDarkMagesSummoned ? `黑暗大法師討伐 ${game.totalDarkMageKills} / 4` : "前往神社對話召喚黑暗大法師"
+          ];
+        }
+        if (game.stage === 2) {
+          const turrets = game.buildings.filter((b) => b.alive && b.type === "turret").length;
+          const camps = game.buildings.filter((b) => b.alive && b.type === "camp").length;
+          const darkMageTowers = game.buildings.filter((b) => b.alive && b.type === "darkMageTower").length;
+          return [
+            "第二關：建立防線",
+            `砲塔 ${turrets} / 9`,
+            `營地 ${camps} / 3`,
+            `黑暗小法師 ${darkMageTowers} / 2`,
+            `敵怪擊殺 ${game.totalMonsterKills} / 50`
+          ];
+        }
+        if (game.stage === 3) {
+          return [
+            "第三關：損壞的村莊",
+            `山匪討伐 ${game.stage3BanditKills} / 15`,
+            `黑暗大法師 ${game.stage3DarkMageKills} / 3`,
+            `藍基地 ${game.villageBaseDestroyed ? "已摧毀" : "未摧毀"}`,
+            `綠寶石 ${game.emeraldDelivered ? "已送回核心" : game.carryingEmerald ? "攜帶中" : "未取得"}`
+          ];
+        }
+        if (game.greenCountryBossSpawned && !game.greenCountryBossDefeated) {
+          return [
+            "綠國大魔王戰",
+            "綠國已被消滅，大魔王已現身",
+            `黑暗大法師召喚倒數 ${formatTime(game.greenCountryBossSummonTimer)}`,
+            "擊敗綠國大魔王後，綠國會成為你的地盤"
+          ];
+        }
+        if (game.greenCountryBossDefeated) {
+          return [
+            "綠國已歸你所有",
+            "你已征服綠國",
+            "這裡現在是你的地盤",
+            "可繼續推進主線與最終黑色禁地"
+          ];
+        }
+        return [
+          "第四關：灰暗魔王",
+          game.bossSpawned ? "灰暗魔王已現身" : "前往黑色禁地按 E 召喚大魔王",
+          game.bossSpawned ? "擊敗最終魔王，拯救世界。" : "做好準備後再開戰。"
+        ];
+      }
+
+      function drawUi() {
+        ctx.fillStyle = "rgba(8, 16, 12, 0.76)";
+        ctx.fillRect(18, 18, 400, 224);
+        ctx.strokeStyle = "rgba(197,255,208,0.16)";
+        ctx.strokeRect(18, 18, 400, 224);
+        ctx.fillStyle = "#effff0";
+        ctx.font = "bold 28px 'Noto Sans TC', sans-serif";
+        ctx.textAlign = "left";
+        ctx.fillText(`第 ${game.day} 天`, 34, 52);
+        ctx.fillText(`職業：${JOBS.find((j) => j.id === game.selectedJob).name}`, 34, 84);
+        ctx.fillText(`等級 ${game.player.level}`, 34, 116);
+        ctx.fillStyle = "#d5edd7";
+        ctx.font = "22px 'Noto Sans TC', sans-serif";
+        ctx.fillText(`敵怪 ${waveMonsterCount()}`, 34, 146);
+        ctx.fillText(`永久紅寶石 ${game.permanentRubies}`, 34, 176);
+        ctx.fillText(`菁英士兵 ${game.minions.filter((m) => m.alive && m.elite).length} / 小伐木工 ${game.minions.filter((m) => m.alive && m.gatherOnly).length}`, 34, 206);
+
+        drawBar(452, 32, 320, 24, game.player.hp / game.player.maxHp, "rgba(20,20,20,0.85)", "#ff7474");
+        drawBar(452, 86, 320, 24, game.player.cores / 100, "rgba(20,20,20,0.85)", "#ffd062");
+        drawBar(452, 140, 320, 24, game.player.hunger / 100, "rgba(20,20,20,0.85)", "#8ddf84");
+        ctx.fillStyle = "#fff";
+        ctx.font = "22px 'Noto Sans TC', sans-serif";
+        ctx.fillText(`生命 ${Math.max(0, Math.floor(game.player.hp))} / ${game.player.maxHp}`, 452, 28);
+        ctx.fillText(`核心穩定度 ${Math.max(0, Math.floor(game.player.cores))} / 100`, 452, 82);
+        ctx.fillText(`飽食 ${Math.floor(game.player.hunger)} / 100`, 452, 136);
+
+        ctx.fillStyle = "rgba(8, 16, 12, 0.86)";
+        ctx.fillRect(900, 18, 682, 256);
+        ctx.strokeStyle = "rgba(197,255,208,0.16)";
+        ctx.strokeRect(900, 18, 682, 256);
+        ctx.fillStyle = "#ecffee";
+        ctx.font = "bold 24px 'Noto Sans TC', sans-serif";
+        ctx.fillText("關卡目標", 922, 48);
+        ctx.font = "20px 'Noto Sans TC', sans-serif";
+        let y = 82;
+        for (const line of stageText()) {
+          ctx.fillText(line, 922, y);
+          y += 34;
+        }
+
+        ctx.fillStyle = "rgba(8, 16, 12, 0.86)";
+        ctx.fillRect(18, 694, 660, 188);
+        ctx.strokeStyle = "rgba(197,255,208,0.16)";
+        ctx.strokeRect(18, 694, 660, 188);
+        ctx.fillStyle = "#effff0";
+        ctx.font = "20px 'Noto Sans TC', sans-serif";
+        const buildLabel = BUILDINGS[game.selectedBuild]?.name || "圍牆";
+        const poisonTip = game.player.poisonCooldown > 0 ? `右鍵毒藥水冷卻 ${game.player.poisonCooldown.toFixed(1)} 秒` : "右鍵可丟毒藥水";
+        const lines = [
+          "WASD 移動  |  左鍵射擊 / 建造  |  右鍵毒藥水  |  Space 近戰",
+          "E 互動 / 採集 / 神社 / 傳送  |  Q 建造模式  |  1-5 切換建築",
+          "H 釣魚  |  R 吃食物  |  T 丟炸彈  |  ESC 暫停 / 存讀檔",
+          `目前建築：${buildLabel}  |  ${poisonTip}`
+        ];
+        lines.forEach((line, i) => ctx.fillText(line, 34, 730 + i * 38));
+
+        ctx.fillStyle = "rgba(8, 16, 12, 0.86)";
+        ctx.fillRect(1316, 690, 266, 192);
+        ctx.strokeStyle = "rgba(197,255,208,0.16)";
+        ctx.strokeRect(1316, 690, 266, 192);
+        ctx.fillStyle = "#effff0";
+        ctx.font = "bold 20px 'Noto Sans TC', sans-serif";
+        ctx.fillText("小地圖", 1336, 720);
+        const mapX = 1336;
+        const mapY = 736;
+        const mapW = 224;
+        const mapH = 128;
+        ctx.fillStyle = "#183220";
+        ctx.fillRect(mapX, mapY, mapW, mapH);
+        ctx.strokeStyle = "rgba(255,255,255,0.18)";
+        ctx.strokeRect(mapX, mapY, mapW, mapH);
+        const dot = (x, y, color, size = 4) => {
+          ctx.fillStyle = color;
+          ctx.beginPath();
+          ctx.arc(mapX + (x / WORLD_W) * mapW, mapY + (y / WORLD_H) * mapH, size, 0, Math.PI * 2);
+          ctx.fill();
+        };
+        dot(game.player.x, game.player.y, "#fff", 5);
+        dot(BASE_POS.x, BASE_POS.y, "#ffd574", 5);
+        dot(SHRINE_POS.x, SHRINE_POS.y, "#e8ffd0", 4);
+        dot(GREEN_COUNTRY.x, GREEN_COUNTRY.y, "#82df91", 5);
+        dot(VILLAGE_POS.x, VILLAGE_POS.y, "#e1b8a8", 4);
+        dot(BOSS_ZONE_POS.x, BOSS_ZONE_POS.y, "#ff7d88", 4);
+        game.buildings.filter((b) => b.alive && b.type === "house").forEach((b) => dot(b.x, b.y, "#c8a885", 3));
+        game.minions.filter((m) => m.alive && m.elite).forEach((m) => dot(m.x, m.y, "#f0ca5f", 2.7));
+        game.minions.filter((m) => m.alive && m.gatherOnly).forEach((m) => dot(m.x, m.y, "#8cd47a", 2.2));
+        game.monsters.filter((m) => m.alive && m.faction === "monster").forEach((m) => dot(m.x, m.y, "#ff877c", 2.1));
+        game.monsters.filter((m) => m.alive && m.faction === "green").forEach((m) => dot(m.x, m.y, "#75d881", 2.1));
+
+        if (game.messages.length > 0) {
+          ctx.fillStyle = "rgba(8, 16, 12, 0.78)";
+          ctx.fillRect(410, 822, 780, 48);
+          ctx.strokeStyle = "rgba(255,255,255,0.12)";
+          ctx.strokeRect(410, 822, 780, 48);
+          ctx.fillStyle = "#fff2c8";
+          ctx.font = "22px 'Noto Sans TC', sans-serif";
+          ctx.textAlign = "center";
+          ctx.fillText(game.messages[0].text, 800, 854);
+          ctx.textAlign = "left";
+        }
+
+        if (game.activeShop) drawShopPanel();
+        if (game.pause) drawPausePanel();
+        if (game.scene === "gameover") drawGameOver();
+        if (game.scene === "victory") drawVictory();
+      }
+
+      function drawShopPanel() {
+        ctx.fillStyle = "rgba(8,12,10,0.94)";
+        ctx.fillRect(470, 180, 660, 340);
+        ctx.strokeStyle = "rgba(220,255,228,0.22)";
+        ctx.strokeRect(470, 180, 660, 340);
+        ctx.fillStyle = "#effff0";
+        ctx.font = "bold 34px 'Noto Sans TC', sans-serif";
+        let title = "商店";
+        let lines = [];
+        if (game.activeShop === "bomb") {
+          title = "炸彈店";
+          lines = ["按 1：20 水晶換 10 個炸彈"];
+        } else if (game.activeShop === "grocery") {
+          title = "超市";
+          lines = ["按 1：20 木材換 4 個肉"];
+        } else if (game.activeShop === "tools") {
+          title = "工具行";
+          lines = ["按 1：40 纖維換 劍", "按 2：30 水晶換 盔甲", "按 3：35 水晶換 藥水強化"];
+        }
+        ctx.fillText(title, 520, 236);
+        ctx.font = "26px 'Noto Sans TC', sans-serif";
+        lines.forEach((line, i) => ctx.fillText(line, 520, 298 + i * 48));
+        ctx.fillStyle = "#d4ebd7";
+        ctx.font = "22px 'Noto Sans TC', sans-serif";
+        ctx.fillText("按 ESC 關閉商店", 520, 470);
+      }
+
+      function drawPausePanel() {
+        ctx.fillStyle = "rgba(4,8,7,0.72)";
+        ctx.fillRect(0, 0, SCREEN_W, SCREEN_H);
+        ctx.fillStyle = "rgba(10,18,14,0.96)";
+        ctx.fillRect(480, 160, 640, 420);
+        ctx.strokeStyle = "rgba(255,255,255,0.15)";
+        ctx.strokeRect(480, 160, 640, 420);
+        ctx.fillStyle = "#effff0";
+        ctx.font = "bold 40px 'Noto Sans TC', sans-serif";
+        ctx.fillText("暫停選單", 540, 226);
+        ctx.font = "26px 'Noto Sans TC', sans-serif";
+        ctx.fillText("F5：快速存檔", 540, 302);
+        ctx.fillText("F9：快速讀檔", 540, 350);
+        ctx.fillText("O：匯出文字存檔", 540, 398);
+        ctx.fillText("I：載入文字存檔", 540, 446);
+        ctx.fillText("ESC：返回遊戲", 540, 494);
+      }
+
+      function drawTitle() {
+        const g = ctx.createLinearGradient(0, 0, 0, SCREEN_H);
+        g.addColorStop(0, "#0a120e");
+        g.addColorStop(1, "#151f18");
+        ctx.fillStyle = g;
+        ctx.fillRect(0, 0, SCREEN_W, SCREEN_H);
+
+        ctx.fillStyle = "rgba(93, 168, 110, 0.08)";
+        for (let i = 0; i < 18; i++) {
+          ctx.beginPath();
+          ctx.arc(rand(0, SCREEN_W), rand(0, SCREEN_H), rand(40, 180), 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        ctx.fillStyle = "#f3ffef";
+        ctx.textAlign = "left";
+        ctx.font = "bold 64px 'Noto Sans TC', sans-serif";
+        ctx.fillText("邊境據點", 120, 130);
+        ctx.fillStyle = "#cde7cf";
+        ctx.font = "28px 'Noto Sans TC', sans-serif";
+        ctx.fillText("開放世界生存建造 / 綠國 / 神社 / Boss 戰 / 多職業 Web 版", 122, 178);
+
+        ctx.fillStyle = "rgba(11,18,14,0.86)";
+        ctx.fillRect(100, 236, 1400, 520);
+        ctx.strokeStyle = "rgba(216,255,226,0.12)";
+        ctx.strokeRect(100, 236, 1400, 520);
+        ctx.fillStyle = "#effff0";
+        ctx.font = "bold 34px 'Noto Sans TC', sans-serif";
+        ctx.fillText("請先選職業", 132, 286);
+        ctx.font = "24px 'Noto Sans TC', sans-serif";
+        JOBS.forEach((job, index) => {
+          const y = 338 + index * 62;
+          const selected = game.selectedJob === job.id;
+          ctx.fillStyle = selected ? "rgba(130, 222, 123, 0.18)" : "transparent";
+          ctx.fillRect(126, y - 30, 1340, 46);
+          ctx.fillStyle = selected ? "#f7ffd9" : "#dbeedd";
+          ctx.fillText(`${job.key}. ${job.name}：${job.desc}`, 144, y);
+        });
+        ctx.fillStyle = "#fff2c8";
+        ctx.font = "28px 'Noto Sans TC', sans-serif";
+        ctx.fillText("按 Enter 開始新遊戲", 132, 700);
+        ctx.fillText("按 L 載入遊戲", 132, 738);
+        ctx.fillStyle = "#d6e7d7";
+        ctx.fillText(`永久紅寶石：${game.permanentRubies}`, 1110, 700);
+        ctx.font = "22px 'Noto Sans TC', sans-serif";
+        ctx.fillText("這版支援 localStorage 快速存檔，也支援匯出/載入文字存檔。", 1110, 740);
+      }
+
+      function drawIntro() {
+        const alpha = clamp(game.introTimer / 1.2, 0, 1);
+        ctx.fillStyle = `rgba(6, 8, 7, ${0.92 * alpha})`;
+        ctx.fillRect(0, 0, SCREEN_W, SCREEN_H);
+        ctx.fillStyle = "rgba(150, 34, 34, 0.16)";
+        for (let i = 0; i < 8; i++) {
+          ctx.beginPath();
+          ctx.arc(240 + i * 170, 220 + Math.sin(game.introTimer * 1.2 + i) * 32, 90 + i * 10, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        const text = "世界已被怪物摧毀，你是唯一的倖存者，請你拯救世界，殺死統治世界的灰暗魔王，祝你好運！";
+        const chars = Math.floor(clamp(game.introTimer * 10, 0, text.length));
+        ctx.fillStyle = "#f2fff1";
+        ctx.font = "bold 60px 'Noto Sans TC', sans-serif";
+        ctx.fillText("末日序章", 180, 210);
+        ctx.font = "36px 'Noto Sans TC', sans-serif";
+        wrapText(text.slice(0, chars), 180, 330, 1040, 58, "#ebf6e8");
+        ctx.fillStyle = "#ffe8bf";
+        ctx.font = "26px 'Noto Sans TC', sans-serif";
+        ctx.fillText("按 Enter 或 Space 可略過", 182, 720);
+      }
+
+      function drawGameOver() {
+        ctx.fillStyle = "rgba(6, 4, 4, 0.68)";
+        ctx.fillRect(0, 0, SCREEN_W, SCREEN_H);
+        ctx.fillStyle = "#fff1f1";
+        ctx.font = "bold 72px 'Noto Sans TC', sans-serif";
+        ctx.fillText("你失敗了", 610, 320);
+        ctx.font = "28px 'Noto Sans TC', sans-serif";
+        ctx.fillText("按 R 重新開始，或按 L 載入最近存檔。", 520, 396);
+      }
+
+      function drawVictory() {
+        ctx.fillStyle = "rgba(6, 12, 7, 0.64)";
+        ctx.fillRect(0, 0, SCREEN_W, SCREEN_H);
+        ctx.fillStyle = "#faffd9";
+        ctx.font = "bold 72px 'Noto Sans TC', sans-serif";
+        ctx.fillText("世界得救了", 560, 300);
+        ctx.font = "30px 'Noto Sans TC', sans-serif";
+        ctx.fillText("你擊敗了灰暗魔王，邊境據點迎來新的曙光。", 430, 368);
+        ctx.fillText("按 R 回到標題重新開始。", 570, 426);
+      }
+
+      function wrapText(text, x, y, maxWidth, lineHeight, color = "#fff") {
+        ctx.fillStyle = color;
+        let line = "";
+        let offsetY = 0;
+        for (const ch of text) {
+          const test = line + ch;
+          if (ctx.measureText(test).width > maxWidth && line) {
+            ctx.fillText(line, x, y + offsetY);
+            line = ch;
+            offsetY += lineHeight;
+          } else {
+            line = test;
+          }
+        }
+        if (line) ctx.fillText(line, x, y + offsetY);
+      }
+
+      function render() {
+        ctx.clearRect(0, 0, SCREEN_W, SCREEN_H);
+        if (game.scene === "title") {
+          drawTitle();
+          return;
+        }
+        if (game.scene === "intro") {
+          drawIntro();
+          return;
+        }
+        drawWorld();
+        drawUi();
+      }
+
+      function purchaseShopItem(key) {
+        if (!game.activeShop) return;
+        if (game.activeShop === "bomb" && key === "Digit1") {
+          if (game.inventory.crystal >= 20) {
+            game.inventory.crystal -= 20;
+            game.inventory.bomb += 10;
+            pushMessage("買到 10 個炸彈。", 2.2);
+          } else pushMessage("水晶不足。", 2.2);
+        }
+        if (game.activeShop === "grocery" && key === "Digit1") {
+          if (game.inventory.wood >= 20) {
+            game.inventory.wood -= 20;
+            game.inventory.meat += 4;
+            pushMessage("換到 4 個肉。", 2.2);
+          } else pushMessage("木材不足。", 2.2);
+        }
+        if (game.activeShop === "tools") {
+          if (key === "Digit1") {
+            if (game.inventory.fiber >= 40) {
+              game.inventory.fiber -= 40;
+              game.hasSword = true;
+              pushMessage("你獲得了劍。", 2.2);
+            } else pushMessage("纖維不足。", 2.2);
+          }
+          if (key === "Digit2") {
+            if (game.inventory.crystal >= 30) {
+              game.inventory.crystal -= 30;
+              game.hasArmor = true;
+              pushMessage("你獲得了盔甲。", 2.2);
+            } else pushMessage("水晶不足。", 2.2);
+          }
+          if (key === "Digit3") {
+            if (game.inventory.crystal >= 35) {
+              game.inventory.crystal -= 35;
+              game.hasPoisonUpgrade = true;
+              pushMessage("你的毒藥已被強化。", 2.2);
+            } else pushMessage("水晶不足。", 2.2);
+          }
+        }
+      }
+
+      function serializeInput(event) {
+        const rect = canvas.getBoundingClientRect();
+        mouse.x = ((event.clientX - rect.left) / rect.width) * SCREEN_W;
+        mouse.y = ((event.clientY - rect.top) / rect.height) * SCREEN_H;
+        mouse.worldX = mouse.x + game.camera.x;
+        mouse.worldY = mouse.y + game.camera.y;
+      }
+
+      window.addEventListener("keydown", (event) => {
+        if (game.scene === "title") {
+          const job = JOBS.find((j) => event.code === `Digit${j.id}`);
+          if (job) game.selectedJob = job.id;
+          if (event.code === "Enter") startGame();
+          if (event.code === "KeyL" && loadLocal()) pushMessage("已載入本機存檔。", 2.8);
+          return;
+        }
+        if (game.scene === "intro") {
+          if (event.code === "Enter" || event.code === "Space") game.scene = "playing";
+          return;
+        }
+        if (game.scene === "gameover") {
+          if (event.code === "KeyR") { game.scene = "title"; }
+          if (event.code === "KeyL") loadLocal();
+          return;
+        }
+        if (game.scene === "victory") {
+          if (event.code === "KeyR") game.scene = "title";
+          return;
+        }
+
+        if (event.code === "Escape") {
+          if (game.activeShop) {
+            game.activeShop = null;
+          } else {
+            game.pause = !game.pause;
+          }
+          return;
+        }
+
+        if (game.pause) {
+          if (event.code === "F5") { saveLocal(); pushMessage("已快速存檔。", 2.4); }
+          if (event.code === "F9") { if (loadLocal()) pushMessage("已載入快速存檔。", 2.4); }
+          if (event.code === "KeyO") exportTxtSave();
+          if (event.code === "KeyI") importInput.click();
+          return;
+        }
+
+        if (game.activeShop) {
+          purchaseShopItem(event.code);
+          return;
+        }
+
+        keys.add(event.code);
+        if (event.code === "KeyE") interact();
+        if (event.code === "Space") meleeAttack();
+        if (event.code === "KeyH") fishAction();
+        if (event.code === "KeyR") eatFood();
+        if (event.code === "KeyT") throwBomb();
+        if (event.code === "KeyQ") game.buildMode = !game.buildMode;
+        if (event.code === "Digit1") game.selectedBuild = "wall";
+        if (event.code === "Digit2") game.selectedBuild = "turret";
+        if (event.code === "Digit3") game.selectedBuild = "camp";
+        if (event.code === "Digit4") game.selectedBuild = "darkMageTower";
+        if (event.code === "Digit5") game.selectedBuild = "house";
+        if (event.code === "F5") { saveLocal(); pushMessage("已快速存檔。", 2.4); }
+        if (event.code === "F9") { if (loadLocal()) pushMessage("已載入快速存檔。", 2.4); }
+      });
+
+      window.addEventListener("keyup", (event) => {
+        keys.delete(event.code);
+      });
+
+      canvas.addEventListener("mousemove", serializeInput);
+      canvas.addEventListener("mousedown", (event) => {
+        serializeInput(event);
+        if (event.button === 0) mouse.left = true;
+        if (event.button === 2) { mouse.right = true; throwPoisonPotion(); }
+      });
+      canvas.addEventListener("mouseup", (event) => {
+        if (event.button === 0) mouse.left = false;
+        if (event.button === 2) mouse.right = false;
+      });
+      canvas.addEventListener("contextmenu", (event) => event.preventDefault());
+
+      function loop(now) {
+        const dt = clamp((now - lastTime) / 1000, 0, 0.033);
+        lastTime = now;
+        update(dt);
+        render();
+        requestAnimationFrame(loop);
+      }
+
+      render();
+      requestAnimationFrame(loop);
+    })();
+  </script>
+</body>
+</html>
